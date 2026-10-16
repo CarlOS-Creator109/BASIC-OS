@@ -39,6 +39,8 @@ Notas de Render gratis: el servicio se duerme tras 15 min sin visitas y la prime
 - crea el archivo `HUB.CFG` (una linea: `https://TU-SERVICIO.onrender.com`) en la particion FAT. Al armar la imagen:
   `make pc-basic-doom.img HUB_URL=https://TU-SERVICIO.onrender.com`
 
+Antes de armar la imagen compila la red con HTTPS: `make net` (baja iPXE de GitHub, ~2 min; deja `tools/net/NET.BIN`).
+
 Requisitos en la maquina: tarjeta de red soportada por iPXE (e1000, rtl8139/8168, virtio...), cable al router con DHCP,
 ~180 MB de RAM, y el RTC con la fecha mas o menos bien (HTTPS rechaza certificados si el reloj esta en el 2000).
 En QEMU: `-m 256 -nic user,model=e1000`.

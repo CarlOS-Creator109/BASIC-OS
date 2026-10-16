@@ -116,6 +116,10 @@ endef
 $(foreach a,$(STOREAPPS),$(eval $(call STOREAPP,$(a))))
 store: $(foreach a,$(STOREAPPS),store/$(shell echo $(a) | tr a-z A-Z).BIN)
 
+# NET.BIN (iPXE con HTTPS): baja iPXE de GitHub y lo compila con los parches de tools/net/overlay (~2 min). Hace falta para PKG.
+net:
+	sh tools/net/build.sh
+
 run: pc-basic.img
 	qemu-system-x86_64 -drive format=raw,file=pc-basic.img,if=floppy
 
@@ -126,4 +130,4 @@ clean:
 	rm -f *.o *.elf *.bin pc-basic.img pc-basic-doom.img $(SYSDIR)/*.o $(SYSDIR)/*.elf $(SYSDIR)/*.SYS $(SYSDIR)/*.APP apps/*.o apps/*.elf
 	$(MAKE) -C test clean
 
-.PHONY: all run test clean store
+.PHONY: all run test clean store net
