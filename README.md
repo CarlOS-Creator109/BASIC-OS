@@ -255,7 +255,8 @@ Probado en QEMU: disco vacio, y el mismo disco con subcarpetas y nombres largos 
 
 ## Tienda de programas (PKG + hub)
 `PKG` (o `EXEC "PKG.APP"`) baja por Ethernet y HTTPS la lista de programas de un **hub** (`hub/server.py`, pensado para Render, que a su vez los toma de la
-carpeta `store/` de tu repo de GitHub), te deja elegir uno, comprueba su SHA-256 y lo ejecuta desde RAM (el FS aun es de solo lectura, asi que no se guarda).
+carpeta `store/` de tu repo de GitHub), te deja elegir uno, comprueba su SHA-256 y lo ejecuta.
+Si arrancaste de un disco FAT16 que ve la BIOS (el que crea `INSTALL`), PKG guarda cada programa en `HDn.1:/APPS/` y la proxima vez lo ejecuta desde el disco sin red (`+N` lo baja otra vez, `-N` lo borra). El kernel sigue siendo de solo lectura: el escritor FAT16 vive dentro de `PKG.APP`.
 Los programas son modulos PCBM enlazados a **0x9000000**; `make store` compila `apps/*.c` a `store/*.BIN`. Necesita ~180 MB de RAM (QEMU: `-m 256 -nic user,model=e1000`).
 La direccion del hub va en `HUB.CFG` (`make pc-basic-doom.img HUB_URL=https://...`) o se escribe con la tecla `U`; no hay una por defecto a proposito.
 Guia completa de despliegue y seguridad: [`hub/README.md`](hub/README.md).
