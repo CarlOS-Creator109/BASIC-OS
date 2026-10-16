@@ -1,0 +1,49 @@
+#!/bin/busybox sh
+# BashTerminal: init del initramfs
+/bin/busybox --install -s /bin 2>/dev/null
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin HOME=/root TERM=linux TERMINFO=/usr/share/terminfo
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mkdir -p /dev/pts /dev/shm
+mount -t tmpfs tmpfs /tmp
+KM=la
+for a in $(cat /proc/cmdline); do case "$a" in kmap=*) KM="${a#kmap=}";; esac; done
+[ -f /etc/$KM.bmap ] || KM=la
+loadkmap < /etc/$KM.bmap 2>/dev/null
+echo 0 > /proc/sys/kernel/printk 2>/dev/null
+clear
+echo "  BashTerminal - Linux $(uname -r) sobre PC BASIC"
+echo "  Buscando el disco compartido (BZIMAGE en una particion FAT)..."
+find_disk() {
+  for d in /dev/sd[a-z][0-9] /dev/sd[a-z] /dev/hd[a-z][0-9]; do
+    [ -b "$d" ] || continue
+    mount -t vfat -o rw,iocharset=iso8859-1,shortname=mixed "$d" /mnt 2>/dev/null || continue
+    [ -f /mnt/BZIMAGE ] && { echo "  Disco compartido: $d -> /mnt"; return 0; }
+    umount /mnt
+  done
+  return 1
+}
+t=0
+until find_disk; do
+  t=$((t+1)); [ $t -ge 25 ] && { echo "  (no encontre el disco compartido; /mnt queda vacio)"; break; }
+  sleep 0.4
+done
+ln -sf /mnt /root/disco 2>/dev/null
+echo "  Teclado: $KM   (cambia con: kmap us  /  kmap la)"
+echo "  Escribe 'poweroff' o 'reboot' para salir. 'ls /mnt' muestra el USB/IMG."
+echo
+cat > /etc/profile <<'EOP'
+export PS1='\[\e[1;32m\]bashterminal\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
+alias ls='ls --color=auto'
+alias ll='ls -l'
+EOP
+cat > /etc/passwd <<'EOP'
+root:x:0:0:root:/root:/bin/bash
+EOP
+echo "root:x:0:" > /etc/group
+while true; do
+  setsid cttyhack /bin/bash -l
+  echo "(bash termino; reiniciando shell. 'poweroff' para apagar)"
+  sleep 1
+done

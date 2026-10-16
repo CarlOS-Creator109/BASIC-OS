@@ -1,0 +1,23 @@
+# Blueprint de Render: https://render.com/docs/blueprint-spec
+# Render > New > Blueprint > elige tu repo. Despues pon GH_REPO (y GITHUB_TOKEN si quieres) en Environment.
+services:
+  - type: web
+    name: basicos-hub
+    runtime: python
+    plan: free                 # el plan gratis se duerme a los 15 min sin visitas: la primera descarga tarda ~1 min
+    buildCommand: "echo sin dependencias"
+    startCommand: "python3 hub/server.py"
+    healthCheckPath: /health
+    envVars:
+      - key: GH_REPO
+        sync: false            # tu-usuario/tu-repo
+      - key: GH_BRANCH
+        value: main
+      - key: GH_PATH
+        value: store
+      - key: GITHUB_TOKEN
+        sync: false            # opcional
+      - key: CACHE_TTL
+        value: "120"
+      - key: PYTHON_VERSION
+        value: "3.12.3"

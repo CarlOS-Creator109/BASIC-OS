@@ -1,0 +1,5 @@
+#!/bin/sh
+case "$1" in
+  us|la) loadkmap < /etc/$1.bmap && echo "teclado: $1" ;;
+  *) echo "uso: kmap us|la   (us = ingles, la = latinoamericano)" ;;
+esac

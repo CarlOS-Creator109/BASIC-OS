@@ -1,0 +1,13 @@
+DISQUETE DE PRUEBA PARA PC BASIC
+================================
+Segundo disquete (FD1) con "La marcha de los gladiadores" (Entrada de los
+gladiadores, Julius Fucik, 1897). La melodia sale de un archivo MIDI: se
+tomo la voz principal (677 notas, unos 2 min 30 s).
+
+  DRIVES
+  DIR "FD1:"
+  LOAD "FD1:GLADIA.BAS"
+  RUN
+
+ESC detiene la musica. Notas: lineas 60 en adelante, 3 caracteres cada una
+(NOTA, OCTAVA, DURACION en 16avos). Velocidad: U en la linea 50 (menos = mas rapido).

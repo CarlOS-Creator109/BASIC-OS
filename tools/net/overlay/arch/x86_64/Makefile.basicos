@@ -1,0 +1,23 @@
+# -*- makefile -*- : Force emacs to use Makefile mode
+#
+# BASIC-OS platform: a flat binary linked at 0x700000 and loaded by NET.APP
+
+SRCDIRS		+= interface/basicos
+LDSCRIPT	= scripts/basicos.lds
+LDFLAGS		+= -N --no-check-sections --no-warn-rwx-segments
+CFLAGS		+= -mno-red-zone -mcmodel=small -fno-pic -fno-pie
+CFLAGS_basicos	+= -I$(BOS_ROOT)
+
+MEDIA		+= bos
+NON_AUTO_MEDIA	+= bos
+
+# Drivers: PCI Ethernet drivers whose licence allows GPLv3 (GPL2_OR_LATER, GPL_ANY, BSD...);
+# GPL2_ONLY (sky2, skge, tg3, bnxt, igbvf, myri10ge), unlicensed and wireless drivers are left out
+DRIVERS_BASICOS	:= 3c595 3c90x amd8111e atl1e b44 davicom dmfe eepro100 epic100 forcedeth
+DRIVERS_BASICOS	+= icplus intel intelx intelxl jme myson natsemi pcnet32 pnic rdc realtek rhine
+DRIVERS_BASICOS	+= sis190 sis900 sundance tlan tulip velocity virtio-net vmxnet3 w89c840
+DRIVERS_ipxe	+= $(DRIVERS_BASICOS)
+
+$(BIN)/%.bos : $(BIN)/%.bos.tmp
+	$(QM)$(ECHO) "  [FINISH] $@"
+	$(Q)$(OBJCOPY) -O binary $< $@

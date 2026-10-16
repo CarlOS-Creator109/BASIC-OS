@@ -1,0 +1,11 @@
+NUM?  42 
+? ?REDO FROM START
+? ?  12 
+ 0  1  1  2  3  5  8  13  21  34 
+?OUT OF MEMORY  ERROR IN 10
+N= 3 
+OK
+OK
+OK
+?SYNTAX  ERROR
+HOLA

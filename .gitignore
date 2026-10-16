@@ -1,0 +1,25 @@
+# resultados de compilar
+*.o
+*.elf
+*.bin
+*.img
+*.img.gz
+*.SYS
+*.APP
+DOOM.BIN
+tools/mkbashimg
+apps/*.o
+apps/*.elf
+# iPXE: se baja y compila con tools/net/build.sh
+tools/net/NET.BIN
+tools/net/NET_*.BIN
+tools/net/work/
+# configuracion local
+HUB.CFG
+# WADs completos (solo se incluye el shareware)
+tools/doom/DOOM.WAD
+tools/doom/DOOM2.WAD
+tools/doom/doom.wad
+tools/doom/doom2.wad
+# python
+__pycache__/
