@@ -253,6 +253,8 @@ Pide el numero del disco y que escribas su nombre (por ejemplo `HD1`) antes de b
 Probado en QEMU: disco vacio, y el mismo disco con subcarpetas y nombres largos (sha256 de todos los archivos iguales).
 **Pruebalo primero en una memoria USB, no en el SSD con tu Linux.**
 
+> HTTPS con Render: Render manda la raiz "GTS Root R4" con firma cruzada de GlobalSign; iPXE solo reconoce raices por huella, asi que `tools/net/build.sh` aplica `x509-cross-signed-roots.patch` (acepta un certificado cuyo nombre y llave publica coinciden con una raiz de confianza). Probado en QEMU con una cadena igual a la de Render.
+
 ## Tienda de programas (PKG + hub)
 `PKG` (o `EXEC "PKG.APP"`) baja por Ethernet y HTTPS la lista de programas de un **hub** (`hub/server.py`, pensado para Render, que a su vez los toma de la
 carpeta `store/` de tu repo de GitHub), te deja elegir uno, comprueba su SHA-256 y lo ejecuta.

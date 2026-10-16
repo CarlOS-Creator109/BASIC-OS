@@ -1,0 +1,52 @@
+diff --git a/src/crypto/x509.c b/src/crypto/x509.c
+index a35fc3acd..5568c2e85 100644
+--- a/src/crypto/x509.c
++++ b/src/crypto/x509.c
+@@ -1931,6 +1931,47 @@ int x509_validate_chain ( struct x509_chain *chain, time_t time,
+ 	struct x509_link *link;
+ 	int rc;
+ 
++	/* BASICOS: cross-signed roots.  Servers such as Render send the
++	 * "GTS Root R4" certificate cross-signed by an older root that is no
++	 * longer trusted.  The same key and subject exist in the trust store as
++	 * a self-signed root, but iPXE only matches roots by fingerprint, so the
++	 * chain is rejected.  Replace such a certificate by the trusted
++	 * certificate with identical subject and public key.
++	 */
++	{
++		struct x509_chain *tstore = ( store ? store : &certstore );
++		struct x509_root *troot = ( root ? root : &root_certificates );
++		struct x509_link *clink;
++		struct x509_link *slink;
++		list_for_each_entry ( clink, &chain->links, list ) {
++			struct x509_certificate *c = clink->cert;
++			if ( x509_check_root ( c, troot ) == 0 )
++				continue;
++			list_for_each_entry ( slink, &tstore->links, list ) {
++				struct x509_certificate *t = slink->cert;
++				if ( t == c )
++					continue;
++				if ( t->subject.raw.len != c->subject.raw.len ||
++				     memcmp ( t->subject.raw.data, c->subject.raw.data,
++					      c->subject.raw.len ) != 0 )
++					continue;
++				if ( t->subject.public_key.raw.len !=
++				     c->subject.public_key.raw.len ||
++				     memcmp ( t->subject.public_key.raw.data,
++					      c->subject.public_key.raw.data,
++					      c->subject.public_key.raw.len ) != 0 )
++					continue;
++				if ( x509_check_root ( t, troot ) != 0 )
++					continue;
++				DBGC ( chain, "X509 chain %p replacing \"%s\" with trusted root\n",
++				       chain, x509_name ( c ) );
++				x509_put ( c );
++				clink->cert = x509_get ( t );
++				break;
++			}
++		}
++	}
++
+ 	/* Append any applicable certificates from the certificate store */
+ 	if ( ( rc = x509_auto_append ( chain, store ) ) != 0 )
+ 		return rc;
