@@ -7,7 +7,7 @@
 
 KSECT   := 160                       # sectores reservados para el kernel (80 KB); max 162 (/SYS empieza en el LBA 168)
 CC      := gcc
-CFLAGS  := -m64 -ffreestanding -fno-pic -fno-pie -fno-stack-protector \
+CFLAGS  := -std=gnu17 -m64 -ffreestanding -fno-pic -fno-pie -fno-stack-protector \
            -fno-builtin -fno-asynchronous-unwind-tables -fcf-protection=none \
            -mgeneral-regs-only -mno-red-zone -mcmodel=small -O2 -Wall -Wextra
 LDFLAGS := -m elf_x86_64 -z max-page-size=0x1000 -T linker.ld -nostdlib -z noexecstack --no-warn-rwx-segments

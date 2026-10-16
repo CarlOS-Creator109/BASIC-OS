@@ -176,10 +176,10 @@ const struct kapi kernel_api = {
     vga_con_attach, vga_con_detach, vga_con_resize, vga_con_putc, vga_con_select, vga_con_cursor,
     api_basic_run, api_basic_busy, api_set_tick, api_wm_publish, api_wm_take,
     vga_vid, audio_pcm_play, audio_pcm_stop, audio_pcm_ms, vga_puts,
-    map_mmio, net_args,
+    (void *(*)(unsigned long long, unsigned))map_mmio, net_args,
     kbd_rawin,
     audio_stream_ctl,
-    blk_api
+    (int (*)(const char *, int, unsigned long long, unsigned, void *))blk_api
 };
 
 static int is_gui(const char *n)
