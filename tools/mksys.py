@@ -5,7 +5,7 @@ uso: mksys.py imagen.img NOMBRE=ruta [NOMBRE=ruta ...]
 """
 import struct, sys
 
-DIR_LBA, DIR_SECT, DATA_LBA, END_LBA = 168, 4, 172, 512
+DIR_LBA, DIR_SECT, DATA_LBA, END_LBA = 232, 4, 236, 512
 
 def main():
     img = sys.argv[1]

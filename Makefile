@@ -5,7 +5,7 @@
 #   make test     prueba el interprete en el host (sin arrancar el SO)
 #   make clean
 
-KSECT   := 160                       # sectores reservados para el kernel (80 KB); max 162 (/SYS empieza en el LBA 168)
+KSECT   := 224                       # sectores reservados para el kernel (112 KB); max 226 (/SYS empieza en el LBA 232)
 CC      := gcc
 CFLAGS  := -std=gnu17 -m64 -ffreestanding -fno-pic -fno-pie -fno-stack-protector \
            -fno-builtin -fno-asynchronous-unwind-tables -fcf-protection=none \

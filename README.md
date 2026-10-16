@@ -147,7 +147,7 @@ unidades y `SYS:`, entra en carpetas FAT/ISO, abre `.BAS` en BASIC, `.ICB` como 
 luego `RUN`, W/S mueven. `LOCATE col,fila` mueve el cursor de texto.
 
 **/SYS:** el escritorio, las apps, los iconos y el Pong de texto **no están en el kernel**: son archivos dentro
-de la imagen (sectores 168-511, de solo lectura), que el kernel carga como módulos (`GUI.SYS`, `*.APP`) con
+de la imagen (sectores 232-511, de solo lectura), que el kernel carga como módulos (`GUI.SYS`, `*.APP`) con
 una tabla de funciones (`kapi.h`). `DIR "SYS:"` los lista. Se arman con `tools/mksys.py` al construir la imagen.
 **Iconos `.icb`** (ICono de BASIC-OS): texto; primera línea `ICB`, luego una fila por línea con un dígito hex por
 bloque (color del C64 0-F) y `.` para transparente (hasta 24x24). Pon el tuyo en `icons/` y se incluye.
