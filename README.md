@@ -81,6 +81,7 @@ ningún modo VBE usable, cae a texto VGA de 80x25.
 | `lib.c` | `memset`, `memcpy`, `memmove`, `memcmp`, `strlen` |
 | `basic.c` | El intérprete de BASIC (sin dependencias de hardware) |
 | `sys/pkg.c` | PKG.APP: tienda de programas (lista, descarga por HTTPS, SHA-256, ejecuta) |
+| `sys/install.c` | INSTALL.APP: instala el sistema en otro disco o en el mismo USB (particion + FAT16 "BASIC-OS FS") |
 | `sys/doomapp.c` / `sys/doom.c` | DOOM: `DOOM.APP` (en /SYS) carga `DOOM.BIN` (motor PureDOOM + pantalla/teclado/raton) de la partición FAT; ver sección DOOM |
 | `test/` | Arnés que compila `basic.c` en el host y compara salidas |
 
@@ -236,6 +237,21 @@ salen en mayuscula: para minusculas en la cadena usa Shift (o escribe en la cons
 - **hora** del RTC (puertos CMOS 0x70/0x71): sin fecha correcta TLS rechaza todo certificado;
 - **entropia** de respaldo (jitter del TSC en cada tic de 1024 Hz del RTC) para maquinas sin RDRAND, como el Turion II o QEMU `qemu64`;
 - comando `bosstash <imagen> app|list`: copia lo bajado a memoria fija para `PKG`.
+
+## Instalar (INSTALL)
+
+`INSTALL` (o `EXEC "INSTALL.APP"`) copia el sistema del disco de arranque a otro disco, o al mismo USB:
+
+1. Lee a RAM los primeros 4096 sectores (arranque, stage2, kernel, /SYS) y toda la particion FAT16: archivos, carpetas y nombres largos.
+   Como ya esta todo en memoria, el destino puede ser el mismo USB del que arrancaste.
+2. Crea una tabla de particiones con una particion FAT16 llamada **BASIC-OS FS**, con el tamano de cluster que le toque al disco
+   (hasta ~2 GB de particion), y recoloca los archivos.
+3. Escribe primero la particion, luego el kernel y al final el sector 0; cada bloque se relee y se compara.
+
+Pide el numero del disco y que escribas su nombre (por ejemplo `HD1`) antes de borrar nada. Solo escribe en discos que ve la BIOS
+(INT 13h): un USB de arranque lo es; el USB nativo (EHCI) y los CD no. Hace falta RAM hasta ~200 MB (QEMU: `-m 256`).
+Probado en QEMU: disco vacio, y el mismo disco con subcarpetas y nombres largos (sha256 de todos los archivos iguales).
+**Pruebalo primero en una memoria USB, no en el SSD con tu Linux.**
 
 ## Tienda de programas (PKG + hub)
 `PKG` (o `EXEC "PKG.APP"`) baja por Ethernet y HTTPS la lista de programas de un **hub** (`hub/server.py`, pensado para Render, que a su vez los toma de la

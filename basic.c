@@ -1645,7 +1645,7 @@ static void st_help(void)
     puts_("SOUND KICK|SNARE,HZ,MS  HIHAT,MS  OFF\n");
     puts_("SOUND DRUMKIT,HZ,KIT(0-3),MS  SNDWAIT\n");
     puts_("CDTOC CDPLAY [N] CDSTOP CDEJECT CDSTAT\n");
-    puts_("DESKTOP  YAAI  BASHTERM  TINYCORE  NET  PKG  EXEC \"X.APP\"  LOAD \"\" = PONG\n");
+    puts_("DESKTOP  YAAI  BASHTERM  TINYCORE  NET  PKG  INSTALL  EXEC \"X.APP\"  LOAD \"\" = PONG\n");
     puts_("LOCATE COL,ROW  (TEXT CURSOR)\n");
     puts_("PCI = LIST PCI DEVICES\n");
     puts_("MOUSE: DRAG=COPY  RIGHT/MIDDLE=PASTE\n");
@@ -1781,6 +1781,10 @@ static void exec_statement(void)
             exec_fail(r);
     } else if (kw("PKG")) {
         int r = plat_exec("PKG.APP");
+        if (r < 0)
+            exec_fail(r);
+    } else if (kw("INSTALL")) {
+        int r = plat_exec("INSTALL.APP");
         if (r < 0)
             exec_fail(r);
     } else if (kw("TINYCORE")) {

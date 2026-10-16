@@ -163,7 +163,7 @@ int blk_find(const char *name, int len)
     return -1;
 }
 
-static int bios_read(struct blk *b, u64 lba, int n, void *buf)
+static int bios_xfer(struct blk *b, u64 lba, int n, void *buf, int wr)
 {
     struct bregs r;
     int tries, err = 1, per = 65536 / (int)b->bps, done = 0;
@@ -172,6 +172,8 @@ static int bios_read(struct blk *b, u64 lba, int n, void *buf)
         int c = n - done < per ? n - done : per;
         u64 cur = lba + (u64)done;
         err = 1;
+        if (wr)
+            memcpy((void *)BOUNCE_BUF, (u8 *)buf + (size_t)done * b->bps, (size_t)(b->edd ? c : 1) * b->bps);
         for (tries = 0; tries < 3 && err; tries++) {
             if (b->edd) {
                 u8 *d = (u8 *)DAP;
@@ -183,7 +185,7 @@ static int bios_read(struct blk *b, u64 lba, int n, void *buf)
                 d[7] = (u8)(BOUNCE_SEG >> 8);
                 for (k = 0; k < 8; k++)
                     d[8 + k] = (u8)(cur >> (8 * k));
-                r.ax = 0x4200; r.bx = 0; r.cx = 0; r.dx = (u16)b->bios; r.si = DAP;
+                r.ax = wr ? 0x4300 : 0x4200; r.bx = 0; r.cx = 0; r.dx = (u16)b->bios; r.si = DAP;
                 err = bios_int13(&r);
             } else {
                 u32 spt = b->spt, hd = b->heads, cyl, t, h, s;
@@ -196,7 +198,7 @@ static int bios_read(struct blk *b, u64 lba, int n, void *buf)
                 s = t % spt + 1;
                 if (cyl > 1023)
                     return 1;
-                r.ax = 0x0201;
+                r.ax = wr ? 0x0301 : 0x0201;
                 r.bx = 0;
                 r.cx = (u16)(((cyl & 0xFF) << 8) | ((cyl >> 2) & 0xC0) | s);
                 r.dx = (u16)((h << 8) | (u32)b->bios);
@@ -210,7 +212,8 @@ static int bios_read(struct blk *b, u64 lba, int n, void *buf)
         }
         if (err)
             return 1;
-        memcpy((u8 *)buf + (size_t)done * b->bps, (void *)BOUNCE_BUF, (size_t)c * b->bps);
+        if (!wr)
+            memcpy((u8 *)buf + (size_t)done * b->bps, (void *)BOUNCE_BUF, (size_t)c * b->bps);
         done += c;
     }
     return 0;
@@ -222,7 +225,30 @@ int blk_read(struct blk *b, u64 lba, int n, void *buf)
         return 1;
     if (b->rd)
         return b->rd(b, lba, n, buf);
-    return bios_read(b, lba, n, buf);
+    return bios_xfer(b, lba, n, buf, 0);
+}
+
+/* escritura por BIOS (solo discos que ve la BIOS: no USB nativo ni CD) */
+int blk_write(struct blk *b, u64 lba, int n, const void *buf)
+{
+    if (!b || n <= 0 || b->rd || b->scsi || b->bps != 512)
+        return 1;
+    return bios_xfer(b, lba, n, (void *)buf, 1);
+}
+
+/* kapi: op 0 leer, 1 escribir, 2 sectores (tope 2^31-1), 3 banderas (1 = BOOT, 2 = se puede escribir) */
+int blk_api(const char *name, int op, u64 lba, unsigned n, void *buf)
+{
+    struct blk *b = blk_get(blk_find(name, (int)strlen(name)));
+    if (!b)
+        return -1;
+    if (op == 0)
+        return blk_read(b, lba, (int)n, buf);
+    if (op == 1)
+        return blk_write(b, lba, (int)n, buf);
+    if (op == 2)
+        return b->sectors > 0x7FFFFFFFull ? 0x7FFFFFFF : (int)b->sectors;
+    return (b->boot ? 1 : 0) | (!b->rd && !b->scsi && b->bps == 512 ? 2 : 0);
 }
 
 static char *putnum(char *o, u64 v)

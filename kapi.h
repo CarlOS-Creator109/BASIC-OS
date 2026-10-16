@@ -128,6 +128,9 @@ struct kapi {
      *   op 0 = iniciar (1 = bien, 0 = no hay tarjeta), op 1 = empujar n cuadros desde data (devuelve cuantos entraron),
      *   op 2 = parar, op 3 = cuadros en cola sin sonar todavia */
     int  (*stream)(int op, const void *data, unsigned n);
+    /* discos por nombre ("HD0", "USB0"...):  op 0 = leer n sectores desde lba, 1 = escribir (solo discos de la BIOS),
+     *   op 2 = tamano en sectores, op 3 = banderas (1 = unidad de arranque, 2 = se puede escribir). 0 = bien; -1 = no existe */
+    int  (*blk)(const char *name, int op, unsigned long long lba, unsigned n, void *buf);
 };
 
 /* codigos de retorno de mod_main */

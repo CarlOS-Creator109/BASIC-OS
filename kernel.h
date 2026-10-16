@@ -148,6 +148,8 @@ int  blk_count(void);
 struct blk *blk_get(int i);
 int  blk_find(const char *name, int len);
 int  blk_read(struct blk *b, u64 lba, int n, void *buf);   /* 0 = bien */
+int  blk_write(struct blk *b, u64 lba, int n, const void *buf);
+int  blk_api(const char *name, int op, u64 lba, unsigned n, void *buf);
 void blk_add(struct blk *b);            /* alta de un dispositivo (USB) */
 int  blk_line(int i, char *out);
 

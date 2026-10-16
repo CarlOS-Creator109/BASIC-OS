@@ -46,7 +46,7 @@ kernel.bin: kernel.elf
 MODLD := ld -m elf_x86_64 -T mod.ld -nostdlib -z noexecstack --no-warn-rwx-segments
 SYSDIR := sys
 SYSFILES := GUI.SYS=$(SYSDIR)/GUI.SYS PONG.APP=$(SYSDIR)/PONG.APP CALC.APP=$(SYSDIR)/CALC.APP \
-            FILES.APP=$(SYSDIR)/FILES.APP YAAI.APP=$(SYSDIR)/YAAI.APP BASHTERM.APP=$(SYSDIR)/BASHTERM.APP TINYCORE.APP=$(SYSDIR)/TINYCORE.APP NET.APP=$(SYSDIR)/NET.APP DOOM.APP=$(SYSDIR)/DOOM.APP PKG.APP=$(SYSDIR)/PKG.APP PONG.BAS=$(SYSDIR)/pong.bas \
+            FILES.APP=$(SYSDIR)/FILES.APP YAAI.APP=$(SYSDIR)/YAAI.APP BASHTERM.APP=$(SYSDIR)/BASHTERM.APP TINYCORE.APP=$(SYSDIR)/TINYCORE.APP NET.APP=$(SYSDIR)/NET.APP DOOM.APP=$(SYSDIR)/DOOM.APP PKG.APP=$(SYSDIR)/PKG.APP INSTALL.APP=$(SYSDIR)/INSTALL.APP PONG.BAS=$(SYSDIR)/pong.bas \
             $(foreach i,$(wildcard icons/*.icb),$(shell echo $(notdir $(i)) | tr a-z A-Z)=$(i))
 
 $(SYSDIR)/%.o: $(SYSDIR)/%.c kapi.h mod_head.h $(SYSDIR)/ui.h
@@ -71,9 +71,10 @@ $(eval $(call APP,TINYCORE,tinycore,0x680000))
 $(eval $(call APP,NET,net,0x6F0000))
 $(eval $(call APP,DOOM,doomapp,0x6A0000))
 $(eval $(call APP,PKG,pkg,0x6B0000))
+$(eval $(call APP,INSTALL,install,0x6C0000))
 
 pc-basic.img: boot.bin stage2.bin kernel.bin $(SYSDIR)/GUI.SYS $(SYSDIR)/PONG.APP $(SYSDIR)/CALC.APP \
-              $(SYSDIR)/FILES.APP $(SYSDIR)/YAAI.APP $(SYSDIR)/BASHTERM.APP $(SYSDIR)/TINYCORE.APP $(SYSDIR)/NET.APP $(SYSDIR)/DOOM.APP $(SYSDIR)/PKG.APP $(SYSDIR)/pong.bas $(wildcard icons/*.icb) tools/mksys.py
+              $(SYSDIR)/FILES.APP $(SYSDIR)/YAAI.APP $(SYSDIR)/BASHTERM.APP $(SYSDIR)/TINYCORE.APP $(SYSDIR)/NET.APP $(SYSDIR)/DOOM.APP $(SYSDIR)/PKG.APP $(SYSDIR)/INSTALL.APP $(SYSDIR)/pong.bas $(wildcard icons/*.icb) tools/mksys.py
 	dd if=/dev/zero of=$@ bs=512 count=2880 status=none
 	dd if=boot.bin   of=$@ conv=notrunc status=none
 	dd if=stage2.bin of=$@ bs=512 seek=1 conv=notrunc status=none
@@ -116,10 +117,6 @@ endef
 $(foreach a,$(STOREAPPS),$(eval $(call STOREAPP,$(a))))
 store: $(foreach a,$(STOREAPPS),store/$(shell echo $(a) | tr a-z A-Z).BIN)
 
-# NET.BIN (iPXE con HTTPS): baja iPXE de GitHub y lo compila con los parches de tools/net/overlay (~2 min). Hace falta para PKG.
-net:
-	sh tools/net/build.sh
-
 run: pc-basic.img
 	qemu-system-x86_64 -drive format=raw,file=pc-basic.img,if=floppy
 
@@ -130,4 +127,4 @@ clean:
 	rm -f *.o *.elf *.bin pc-basic.img pc-basic-doom.img $(SYSDIR)/*.o $(SYSDIR)/*.elf $(SYSDIR)/*.SYS $(SYSDIR)/*.APP apps/*.o apps/*.elf
 	$(MAKE) -C test clean
 
-.PHONY: all run test clean store net
+.PHONY: all run test clean store
