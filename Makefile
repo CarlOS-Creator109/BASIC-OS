@@ -90,8 +90,10 @@ SYSFILES := $(filter-out $(addsuffix .APP=%,$(NO32)),$(SYSFILES))
 endif
 SYSPATHS := $(foreach f,$(SYSFILES),$(lastword $(subst =, ,$(f))))
 
+# los modulos de /SYS se compilan con -Os: el area /SYS de la imagen es fija (276 sectores) y con -O2 los
+# GCC nuevos (Arch) ya no cabian. La velocidad casi no cambia: el trabajo pesado lo hace el kernel.
 $(SYSDIR)/%.o: $(SYSDIR)/%.c kapi.h mod_head.h $(SYSDIR)/ui.h
-	$(CC) $(CFLAGS) -I. -c $< -o $@
+	$(CC) $(filter-out -O2,$(CFLAGS)) -Os -I. -c $< -o $@
 
 $(SYSDIR)/GUI.SYS: $(SYSDIR)/gui.o $(LIBO) mod.ld
 	$(MODLD) --defsym=MODBASE=0x300000 $(SYSDIR)/gui.o $(LIBO) -o $(SYSDIR)/gui.elf
