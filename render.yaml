@@ -16,7 +16,11 @@ services:
       - key: GH_PATH
         value: store
       - key: GITHUB_TOKEN
-        sync: false            # opcional
+        sync: false            # necesario para SUBIR (Contents: Read and write); recomendado para leer
+      - key: HUB_KEY
+        sync: false            # clave para subir desde PKG
+      - key: WEBHOOK_SECRET
+        sync: false            # opcional: webhook push de GitHub -> POST /refresh
       - key: CACHE_TTL
         value: "120"
       - key: PYTHON_VERSION

@@ -3,6 +3,7 @@
 #   make          construye todas las versiones: pc-basic.img (64 bits), pc-basic32.img (32 bits),
 #                 pc-basic-doom.img (con DOOM) y pc-basic-video.img (solo si existe el video, ver VIDEO)
 #   make 64 / make 32 / make doom / make video   una sola version
+#   make bas2bin  tools/bas2bin/bas2bin: compila .BAS a .BIN de la tienda (tambien esta en PKG, tecla C)
 #   make super    super-basicos.img: 64 y 32 bits en un solo disco con menu, y una sola particion con
 #                 DOOM, el video (si existe), Linux y NET.BIN que ven los dos (ver tools/super/super.asm)
 #   make run      la arranca en QEMU
@@ -38,7 +39,7 @@ OBJS := $(ENTRYO) kernel.o vga.o kbd.o $(LIBO) sysinfo.o basic.o store.o pci.o m
 # todas las versiones; la de video solo si hay un .BVC (make VIDEO=mi.bvc)
 VIDEO ?= VIDEO.BVC
 ALLIMGS := pc-basic.img pc-basic32.img pc-basic-doom.img $(if $(wildcard $(VIDEO)),pc-basic-video.img)
-all: $(ALLIMGS)
+all: $(ALLIMGS) tools/bas2bin/bas2bin
 	@echo "Listo: $(ALLIMGS)"
 	@$(if $(wildcard $(VIDEO)),,echo "(sin pc-basic-video.img: no existe $(VIDEO); usa make VIDEO=archivo.bvc)")
 64: pc-basic.img
@@ -80,12 +81,12 @@ kernel.bin: kernel.elf
 MODLD := ld -m $(LDEMU) -T mod.ld -nostdlib -z noexecstack --no-warn-rwx-segments
 SYSDIR := sys
 SYSFILES := GUI.SYS=$(SYSDIR)/GUI.SYS PONG.APP=$(SYSDIR)/PONG.APP CALC.APP=$(SYSDIR)/CALC.APP \
-            FILES.APP=$(SYSDIR)/FILES.APP YAAI.APP=$(SYSDIR)/YAAI.APP BASHTERM.APP=$(SYSDIR)/BASHTERM.APP TINYCORE.APP=$(SYSDIR)/TINYCORE.APP NET.APP=$(SYSDIR)/NET.APP DOOM.APP=$(SYSDIR)/DOOM.APP PKG.APP=$(SYSDIR)/PKG.APP INSTALL.APP=$(SYSDIR)/INSTALL.APP PLAY.APP=$(SYSDIR)/PLAY.APP SAY.APP=$(SYSDIR)/SAY.APP PONG.BAS=$(SYSDIR)/pong.bas \
+            FILES.APP=$(SYSDIR)/FILES.APP YAAI.APP=$(SYSDIR)/YAAI.APP BASHTERM.APP=$(SYSDIR)/BASHTERM.APP TINYCORE.APP=$(SYSDIR)/TINYCORE.APP NET.APP=$(SYSDIR)/NET.APP DOOM.APP=$(SYSDIR)/DOOM.APP PKG.APP=$(SYSDIR)/PKG.APP INSTALL.APP=$(SYSDIR)/INSTALL.APP PLAY.APP=$(SYSDIR)/PLAY.APP SAY.APP=$(SYSDIR)/SAY.APP COSMOS.APP=$(SYSDIR)/COSMOS.APP PONG.BAS=$(SYSDIR)/pong.bas \
             $(foreach i,$(wildcard icons/*.icb),$(shell echo $(notdir $(i)) | tr a-z A-Z)=$(i))
 
 # ARCH=32: estas apps dependen del modo largo (arrancan Linux de 64 bits, iPXE de 64 bits o el motor DOOM de 64 bits)
 ifeq ($(ARCH),32)
-NO32 := BASHTERM TINYCORE NET DOOM
+NO32 := BASHTERM TINYCORE NET DOOM COSMOS
 SYSFILES := $(filter-out $(addsuffix .APP=%,$(NO32)),$(SYSFILES))
 endif
 SYSPATHS := $(foreach f,$(SYSFILES),$(lastword $(subst =, ,$(f))))
@@ -117,6 +118,7 @@ $(eval $(call APP,PKG,pkg,0x6B0000))
 $(eval $(call APP,INSTALL,install,0x6C0000))
 $(eval $(call APP,PLAY,play,0x6D0000))
 $(eval $(call APP,SAY,say,0x6E0000))
+$(eval $(call APP,COSMOS,cosmosapp,0x690000))
 
 # SAY usa SSE2 (el modulo lo activa solo): sin -mgeneral-regs-only y sin libm
 $(SYSDIR)/say.o: $(SYSDIR)/say.c kapi.h mod_head.h
@@ -140,13 +142,29 @@ DOOM.BIN: $(SYSDIR)/doom.o $(LIBO) mod.ld
 	objcopy -O binary $(SYSDIR)/doom.elf $@
 	@ls -l $@ | awk '{print "DOOM.BIN: " $$5 " bytes"}'
 
+# ---- COSMOS: navegador con el Minimal Motor (MM) de Cosmos Browser (tools/cosmos/). Como DOOM, no cabe en /SYS:
+#      COSMOS.BIN va en la particion FAT junto a NET.BIN y lo carga COSMOS.APP. El motor usa float: SSE2 como SAY ----
+CMDIR := tools/cosmos
+CMSRC := cosmosmm html layout urls libc
+CMOBJS := $(foreach f,$(CMSRC),$(CMDIR)/$(f).o)
+CMFLAGS := $(filter-out -mgeneral-regs-only -Wall -Wextra,$(CFLAGS)) -msse2 -mfpmath=sse -fno-math-errno \
+           -fno-strict-aliasing -mstackrealign -D__thread= -I$(CMDIR)/inc -I$(CMDIR) -I.
+$(CMDIR)/cosmosmm.o: $(CMDIR)/cosmosmm.c $(CMDIR)/cosmos.h kapi.h mod_head.h
+	$(CC) $(CMFLAGS) -Wall -c $< -o $@
+$(CMDIR)/%.o: $(CMDIR)/%.c $(CMDIR)/cosmos.h $(CMDIR)/inc/cstub.h
+	$(CC) $(CMFLAGS) -w -c $< -o $@
+COSMOS.BIN: $(CMOBJS) mod.ld
+	$(MODLD) --defsym=MODBASE=0x7000000 $(CMOBJS) -o $(CMDIR)/cosmos.elf
+	objcopy -O binary $(CMDIR)/cosmos.elf $@
+	@ls -l $@ | awk '{print "COSMOS.BIN: " $$5 " bytes"}'
+
 # pc-basic-doom.img = PC BASIC + particion FAT16 con DOOM.BIN y el WAD (DOOM1.WAD shareware por defecto; si hay DOOM.WAD se usa)
 WAD ?= $(DOOMDIR)/doom1.wad
 HUB_URL ?=                      # make pc-basic-doom.img HUB_URL=https://mi-hub.onrender.com  -> HUB.CFG en la imagen
 HUB_KEY ?=                      # clave para subir paquetes con PKG (2a linea de HUB.CFG; quien tenga la imagen puede subir)
-pc-basic-doom.img: pc-basic.img DOOM.BIN tools/mkbashimg $(WAD)
+pc-basic-doom.img: pc-basic.img DOOM.BIN COSMOS.BIN tools/mkbashimg $(WAD)
 	tools/mkbashimg $@ pc-basic.img tools/linux/BZIMAGE tools/linux/INITRD.GZ \
-	  --copy DOOM.BIN=DOOM.BIN --copy $(WAD)=$(shell echo $(notdir $(WAD)) | tr a-z A-Z) \
+	  --copy DOOM.BIN=DOOM.BIN --copy COSMOS.BIN=COSMOS.BIN --copy $(WAD)=$(shell echo $(notdir $(WAD)) | tr a-z A-Z) \
 	  $$( [ -f tools/net/NET.BIN ] && echo --copy tools/net/NET.BIN=NET.BIN ) \
 	  $$( [ -n "$(HUB_URL)" ] && { { echo "$(HUB_URL)"; [ -z "$(HUB_KEY)" ] || echo "$(HUB_KEY)"; } > HUB.CFG; echo --copy HUB.CFG=HUB.CFG; } ) --mib 64
 	@echo "Imagen lista: $@  (QEMU: qemu-system-x86_64 -drive format=raw,file=$@,if=ide -m 128)"
@@ -172,13 +190,29 @@ tools/mkbvc: tools/mkbvc.c
 	cc -O2 -o $@ $<
 tools/bvcplay: tools/bvcplay.c
 	cc -O2 -o $@ $< $$(pkg-config --cflags --libs sdl2)
-pc-basic-video.img: pc-basic.img tools/mkbashimg $(VIDEO)
-	tools/mkbashimg $@ pc-basic.img tools/linux/BZIMAGE tools/linux/INITRD.GZ --copy $(VIDEO)=$(shell echo $(notdir $(VIDEO)) | tr a-z A-Z) \
+pc-basic-video.img: pc-basic.img COSMOS.BIN tools/mkbashimg $(VIDEO)
+	tools/mkbashimg $@ pc-basic.img tools/linux/BZIMAGE tools/linux/INITRD.GZ --copy $(VIDEO)=$(shell echo $(notdir $(VIDEO)) | tr a-z A-Z) --copy COSMOS.BIN=COSMOS.BIN \
 	  $$( [ -f tools/net/NET.BIN ] && echo --copy tools/net/NET.BIN=NET.BIN ) --mib $$(( ( $$(stat -c %s $(VIDEO)) / 1048576 ) + 24 ))
 	@echo "Imagen lista: $@  (QEMU: qemu-system-x86_64 -drive format=raw,file=$@,if=ide -m 512 ...; en BASIC: PLAY \"$(shell echo $(notdir $(VIDEO)) | tr a-z A-Z)\")"
 
 net:
 	sh tools/net/build.sh
+
+# ---- bas2bin: compilador de .BAS a .BIN (modulo de la tienda). Runtimes embebidos + herramienta de Linux.
+#      Dentro del sistema esta en PKG (tecla C). En la version de 32 bits solo existe el modo empaquetador. ----
+B2B := tools/bas2bin
+B2BRT := $(B2B)/rt_pack.bin $(if $(filter 32,$(ARCH)),,$(B2B)/rt_native.bin)
+$(B2B)/rt_%.o: $(B2B)/rt_%.c kapi.h mod_head.h $(B2B)/b2b.h
+	$(CC) $(filter-out -O2,$(CFLAGS)) -Os -I. -c $< -o $@
+$(B2B)/rt_%.bin: $(B2B)/rt_%.o $(LIBO) mod.ld
+	$(MODLD) --defsym=MODBASE=0x9000000 $< $(LIBO) -o $(B2B)/rt_$*.elf
+	objcopy -O binary $(B2B)/rt_$*.elf $@
+$(B2B)/b2b_blobs.h: $(B2BRT) $(B2B)/bin2h.py
+	python3 $(B2B)/bin2h.py $@ $(B2BRT)
+$(B2B)/bas2bin: $(B2B)/main.c $(B2B)/b2b.c $(B2B)/b2b.h $(B2B)/b2b_blobs.h
+	cc -O2 -Wall -I. -o $@ $(B2B)/main.c
+$(SYSDIR)/pkg.o: $(B2B)/b2b.c $(B2B)/b2b.h $(B2B)/b2b_blobs.h
+bas2bin: $(B2B)/bas2bin
 
 # ---- super-basicos.img: menu de arranque + PC BASIC 64 + PC BASIC 32 + una FAT16 compartida ----
 SUPERDIR := tools/super
@@ -187,10 +221,10 @@ $(SUPERDIR)/hook.bin: $(SUPERDIR)/hook.asm
 $(SUPERDIR)/super.bin: $(SUPERDIR)/super.asm $(SUPERDIR)/hook.bin
 	cd $(SUPERDIR) && nasm -f bin super.asm -o super.bin
 # la particion lleva todo: DOOM + WAD, el video si existe, NET.BIN si existe y Linux
-build-super/completo64.img: pc-basic.img DOOM.BIN tools/mkbashimg $(WAD) $(wildcard $(VIDEO))
+build-super/completo64.img: pc-basic.img DOOM.BIN COSMOS.BIN tools/mkbashimg $(WAD) $(wildcard $(VIDEO))
 	mkdir -p build-super
 	tools/mkbashimg $@ pc-basic.img tools/linux/BZIMAGE tools/linux/INITRD.GZ \
-	  --copy DOOM.BIN=DOOM.BIN --copy $(WAD)=$(shell echo $(notdir $(WAD)) | tr a-z A-Z) \
+	  --copy DOOM.BIN=DOOM.BIN --copy COSMOS.BIN=COSMOS.BIN --copy $(WAD)=$(shell echo $(notdir $(WAD)) | tr a-z A-Z) \
 	  $(if $(wildcard $(VIDEO)),--copy $(VIDEO)=$(shell echo $(notdir $(VIDEO)) | tr a-z A-Z)) \
 	  $$( [ -f tools/net/NET.BIN ] && echo --copy tools/net/NET.BIN=NET.BIN ) \
 	  $$( [ -n "$(HUB_URL)" ] && { { echo "$(HUB_URL)"; [ -z "$(HUB_KEY)" ] || echo "$(HUB_KEY)"; } > HUB.CFG; echo --copy HUB.CFG=HUB.CFG; } ) \
@@ -225,7 +259,9 @@ test:
 clean:
 	rm -rf build32 pc-basic32.img build-super super-basicos.img $(SUPERDIR)/*.bin
 	rm -f tools/mkbashimg tools/mkbvc tools/bvcplay
+	rm -f $(CMDIR)/*.o $(CMDIR)/cosmos.elf COSMOS.BIN
+	rm -f $(B2B)/*.o $(B2B)/*.elf $(B2B)/*.bin $(B2B)/b2b_blobs.h $(B2B)/bas2bin
 	rm -f *.o *.elf *.bin pc-basic.img pc-basic-doom.img $(SYSDIR)/*.o $(SYSDIR)/*.elf $(SYSDIR)/*.SYS $(SYSDIR)/*.APP apps/*.o apps/*.elf
 	$(MAKE) -C test clean
 
-.PHONY: all 64 32 doom video super run run32 test clean store net
+.PHONY: all 64 32 doom video super bas2bin run run32 test clean store net

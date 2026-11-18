@@ -10,3 +10,4 @@ Este repo incluye o usa:
 | `doom1.wad` (DOOM shareware) | `tools/doom/` | Shareware de id Software: se puede redistribuir sin modificar, no vender. **No subas tu `DOOM.WAD` / `DOOM2.WAD` completos.** |
 | Certificados raiz (se embeben en `NET.BIN`) | generados por `tools/net/build.sh` | Mozilla CA bundle (MPL-2.0) |
 | Linux (BZIMAGE) y Tiny Core (INITRD) para BASHTERM/TINYCORE | `tools/linux/` | GPL-2.0 y las de cada paquete |
+| FTTS (motor de voz de `sys/say.c`) y los formantes de espeak-ng (es-419) incrustados en su tabla `OV[]` | `sys/say.c` | codigo de FTTS: del autor; los valores de formantes vienen de espeak-ng (GPL-3.0-or-later), asi que `SAY.APP` se distribuye bajo GPL-3.0-or-later |

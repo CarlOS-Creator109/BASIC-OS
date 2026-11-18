@@ -7,6 +7,7 @@
 *.SYS
 *.APP
 DOOM.BIN
+COSMOS.BIN
 tools/mkbashimg
 apps/*.o
 apps/*.elf
@@ -23,3 +24,7 @@ tools/doom/doom.wad
 tools/doom/doom2.wad
 # python
 __pycache__/
+
+# bas2bin (generados)
+tools/bas2bin/b2b_blobs.h
+tools/bas2bin/bas2bin

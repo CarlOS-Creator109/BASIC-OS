@@ -27,7 +27,7 @@ struct bos_boot {
 struct hdr { u32 magic, end, entry, base; };
 
 static const char *const where[] = {
-    "HD0.1:NET.BIN", "HD1.1:NET.BIN", "HD2.1:NET.BIN", "HD0:NET.BIN", "HD1:NET.BIN", "FD1:NET.BIN", "FD0:NET.BIN", 0
+    "USB0.1:NET.BIN", "USB1.1:NET.BIN", "HD0.1:NET.BIN", "HD1.1:NET.BIN", "HD2.1:NET.BIN", "HD0:NET.BIN", "HD1:NET.BIN", "FD1:NET.BIN", "FD0:NET.BIN", 0
 };
 
 int mod_main(const struct kapi *K)

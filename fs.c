@@ -450,21 +450,37 @@ int fs_read(const char *spec, char *buf, int max, unsigned int *total)
         return (int)got;
     }
     {
+        /* clusters seguidos en disco = una sola lectura grande (antes: un comando por sector de 512 B) */
         u32 clus = e.clus;
         while (got < left && clus >= 2 && clus < 0x0FFFFFF8) {
-            u32 s;
-            long nx;
-            for (s = 0; s < spc && got < left; s++) {
-                u32 n = left - got < bpb_bps ? left - got : bpb_bps, k;
-                if (rd(clus_lba(clus) + s, 1, sec))
+            u32 first = clus, run = 1, secs, want_secs, whole;
+            long nx = fat_next(clus);
+            if (nx < 0)
+                return FS_EIO;
+            while ((u32)nx == first + run && (u64)run * spc * bpb_bps < left - got && run < 4096) {
+                run++;
+                nx = fat_next(first + run - 1);
+                if (nx < 0)
+                    return FS_EIO;
+            }
+            secs = run * spc;
+            want_secs = (left - got + bpb_bps - 1) / bpb_bps;
+            if (want_secs < secs)
+                secs = want_secs;
+            whole = (left - got) / bpb_bps;             /* sectores completos que van directo al buffer */
+            if (whole > secs)
+                whole = secs;
+            if (whole && rd(clus_lba(first), (int)whole, buf + got))
+                return FS_EIO;
+            got += whole * bpb_bps;
+            if (whole < secs) {                          /* cola: un sector parcial */
+                u32 n = left - got, k;
+                if (rd(clus_lba(first) + whole, 1, sec))
                     return FS_EIO;
                 for (k = 0; k < n; k++)
                     buf[got + k] = (char)sec[k];
                 got += n;
             }
-            nx = fat_next(clus);
-            if (nx < 0)
-                return FS_EIO;
             clus = (u32)nx;
         }
     }

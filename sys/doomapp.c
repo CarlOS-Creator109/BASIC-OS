@@ -16,8 +16,8 @@ void *memset(void *dst, int c, unsigned long n);
 struct hdr { u32 magic, end, entry, base; };
 
 static const char *const where[] = {
-    "HD0.1:DOOM.BIN", "HD1.1:DOOM.BIN", "HD2.1:DOOM.BIN", "HD0:DOOM.BIN", "HD1:DOOM.BIN",
-    "FD1:DOOM.BIN", "FD0:DOOM.BIN", "USB0.1:DOOM.BIN", "USB0:DOOM.BIN", "CD0:DOOM.BIN", 0
+    "USB0.1:DOOM.BIN", "USB1.1:DOOM.BIN", "USB0:DOOM.BIN", "HD0.1:DOOM.BIN", "HD1.1:DOOM.BIN", "HD2.1:DOOM.BIN",
+    "HD0:DOOM.BIN", "HD1:DOOM.BIN", "FD1:DOOM.BIN", "FD0:DOOM.BIN", "CD0:DOOM.BIN", 0
 };
 
 int mod_main(const struct kapi *K)

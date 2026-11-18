@@ -387,8 +387,8 @@ void vga_splash(int pct, const char *msg)
         py = H * 28 / 100;
         sp_text(px + u * 2, py + u * 2, "BOS. BASIC OS", ts, 246, 240, 214);
         sp_text(px, py, "BOS. BASIC OS", ts, 74, 58, 36);
-        n = sp_len("PC BASIC V1.2 (64-BIT)");
-        sp_text((W - n * 8 * u) / 2, py + 16 * ts + 6 * u, "PC BASIC V1.2 (64-BIT)", u, 110, 96, 64);
+        n = sp_len("PC BASIC V1.2 (" BITS_STR ")");
+        sp_text((W - n * 8 * u) / 2, py + 16 * ts + 6 * u, "PC BASIC V1.2 (" BITS_STR ")", u, 110, 96, 64);
 
         sp_plate(bx - 16 * u, by - 8 * u, bw + 32 * u, bh + 16 * u, u);      /* marco de la barra */
         sp_screw(bx - 8 * u, by + bh / 2, 3 * u, 1);

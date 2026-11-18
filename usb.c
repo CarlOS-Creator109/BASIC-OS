@@ -109,13 +109,30 @@ static void qtd_set(struct qtd *q, int pid, int len, int toggle, int ioc, const 
                ((u32)toggle << 31);
 }
 
+extern u64 g_tsc_hz;
+
+/* espera de ~10 us con el TSC (sin TSC calibrado: 1 ms). Con delay_ms(1) cada transferencia perdia >= 1 ms y una
+ * memoria USB no pasaba de unos cientos de KB/s */
+static void wait_10us(void)
+{
+    if (g_tsc_hz) {
+        u64 t = rdtsc() + g_tsc_hz / 100000u;
+        while (rdtsc() < t)
+            ;
+    } else {
+        delay_ms(1);
+    }
+}
+
+#define US_PER_MS (g_tsc_hz ? 100 : 1)          /* pasos de wait_10us() por milisegundo */
+
 static int wait_sts(struct ehci *h, u32 mask, u32 val, int ms)
 {
-    int i;
-    for (i = 0; i < ms; i++) {
+    int i, steps = ms * US_PER_MS;
+    for (i = 0; i < steps; i++) {
         if ((rd32v(h->op, OP_STS) & mask) == val)
             return 1;
-        delay_ms(1);
+        wait_10us();
     }
     return (rd32v(h->op, OP_STS) & mask) == val;
 }
@@ -152,7 +169,7 @@ static int run_chain(struct udev *d, int ep, int mps, int n, int timeout_ms)
     wr32v(h->op, OP_CMD, rd32v(h->op, OP_CMD) | CMD_ASE);
     wait_sts(h, STS_ASS, STS_ASS, 100);
 
-    for (t = 0; t < timeout_ms; t++) {
+    for (t = 0; t < timeout_ms * US_PER_MS; t++) {
         int active = 0;
         for (i = 0; i < n; i++) {
             u32 tok = qtds[i].token;
@@ -171,7 +188,7 @@ static int run_chain(struct udev *d, int ep, int mps, int n, int timeout_ms)
         }
         if (!active)
             goto done;
-        delay_ms(1);
+        wait_10us();
     }
     res = -3;
 done:

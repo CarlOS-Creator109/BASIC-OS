@@ -1,6 +1,6 @@
 # BASIC-OS Hub
 
-Servidor de programas para BASIC-OS. Baja los `.BIN` de una carpeta de tu repo de GitHub y los sirve por URL
+Servidor de programas para BASIC-OS. Lee los `.BIN` de una carpeta de tu repo de GitHub (y guarda ahi lo que subas) y los sirve por URL
 (HTTPS en Render). En el SO, `PKG` lista lo que hay, descarga el programa que elijas por Ethernet, comprueba su
 SHA-256 y lo ejecuta.
 
@@ -68,6 +68,23 @@ Probar sin BASIC-OS:
 ```
 printf 'BOSUP 1\nHOLA.BAS\ntu-clave\nprueba\n10 PRINT "HOLA"\n' | curl --data-binary @- https://TU-SERVICIO.onrender.com/upload
 ```
+
+## 5. Como se mantiene al dia con GitHub
+
+GitHub es la unica fuente de verdad; el hub no guarda programas en su disco (Render gratis lo borra al reiniciar) ni en RAM:
+
+- **Al arrancar o despertar** relee la carpeta del repo (si GitHub no contesta, insiste cada pocos segundos y mientras tanto responde 503, que PKG
+  muestra como "no pude bajar la lista"). La lista solo guarda nombre, tamano, SHA-256 y descripcion; los bytes se piden a GitHub cuando
+  BASIC-OS descarga (API de blobs: siempre el contenido exacto de ese commit).
+- **Si alguien pide la lista y esta vieja** (`CACHE_TTL`, 120 s) se sirve lo que hay y se relee por detras. La relectura usa ETag: si nada
+  cambio GitHub contesta 304 y no cuenta para el limite de la API.
+- **Webhook (opcional, instantaneo):** en tu repo de GitHub, Settings > Webhooks > Add: *Payload URL* `https://TU-SERVICIO.onrender.com/refresh`,
+  *Content type* `application/json`, *Secret* = lo mismo que pongas en `WEBHOOK_SECRET`, evento *Just the push event*.
+- **Si GitHub se cae** sigue sirviendo la ultima lista buena y lo dice en la pagina de estado (`/`).
+- **Subidas:** `PKG` > **S** hace un commit en `GH_BRANCH` con `GH_PATH/NOMBRE.BIN|BAS` y `NOMBRE.TXT`. Necesita en el Environment de Render:
+  `GH_REPO`, `GITHUB_TOKEN` (*fine-grained*, solo ese repo, permiso **Contents: Read and write**) y `HUB_KEY`. Solo con `GH_REPO` el hub
+  puede leer pero no escribir. Sin `GITHUB_TOKEN` ni `LOCAL_DIR` las subidas quedan en memoria y se pierden al reiniciar.
+- Con `GITHUB_TOKEN` el limite de la API es de 5000 peticiones/hora; sin el, 60 (se nota si bajas varios programas distintos).
 
 ## Seguridad (leer)
 

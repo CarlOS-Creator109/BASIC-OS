@@ -36,6 +36,8 @@ int          plat_cd_status(int *track, int *secs);           /* 1 = suena */
 int          plat_exec(const char *name);                     /* ejecuta un modulo de /SYS; <0 = error */
 void         plat_locate(int col, int row);
 void         basic_load_text(const char *text, int n);        /* reemplaza el programa en memoria */
+int          basic_do(const char *stmt);                      /* sentencia suelta, sin READY ni tocar el estado (0 / -1) */
+int          basic_eval(const char *e, int *val);             /* expresion numerica suelta (0 / -1) */
 /* Graficos: coordenadas logicas, origen arriba a la izquierda. c = 0-15 (C64), -1 = color de texto */
 int          plat_gfx_w(void);        /* 0 si no hay modo grafico */
 int          plat_gfx_h(void);

@@ -588,7 +588,7 @@ static void release_all_keys(void)
 /* ---- buscar y cargar el WAD ---- */
 
 static const char *const where[] = {
-    "HD0.1:", "HD1.1:", "HD2.1:", "HD0:", "HD1:", "FD1:", "FD0:", "USB0.1:", "USB0:", "CD0:", 0
+    "USB0.1:", "USB1.1:", "USB0:", "HD0.1:", "HD1.1:", "HD2.1:", "HD0:", "HD1:", "FD1:", "FD0:", "CD0:", 0
 };
 static const char *const wadnames[] = { "DOOM2.WAD", "DOOM.WAD", "DOOMU.WAD", "DOOM1.WAD", 0 };
 

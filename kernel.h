@@ -8,9 +8,15 @@ typedef unsigned int   u32;
 typedef signed int     i32;
 typedef short          s16;
 typedef unsigned long  size_t;
-typedef unsigned long  u64;
+typedef unsigned long long u64;
 
 #define NULL ((void *)0)
+
+#ifdef __x86_64__
+#define BITS_STR "64-BIT"
+#else
+#define BITS_STR "32-BIT"
+#endif
 
 static inline void outb(u16 port, u8 v)
 {

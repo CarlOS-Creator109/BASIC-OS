@@ -5,6 +5,8 @@
  */
 #include "kernel.h"
 
+#ifdef __x86_64__
+
 #define PDPT ((volatile u64 *)0x71000)
 
 static u64 extra_pd[4][512] __attribute__((aligned(4096)));
@@ -38,3 +40,14 @@ void *map_mmio(u64 phys, u32 size)
     }
     return (void *)(unsigned long)phys;
 }
+
+#else   /* ARCH=32: sin paginacion, la direccion fisica ya es accesible */
+
+void *map_mmio(u64 phys, u32 size)
+{
+    if (!size || phys + size > 0x100000000ULL)
+        return NULL;
+    return (void *)(unsigned long)phys;
+}
+
+#endif

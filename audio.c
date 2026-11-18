@@ -407,6 +407,7 @@ const char *audio_info(void)
 static s16 st_buf[ST_FRAMES * 2];
 static u32 st_head, st_tail;                    /* contadores libres, en cuadros */
 static int st_on;
+static int st_gain = 6;                         /* ganancia del flujo (op 5; x6 por defecto: los efectos de Doom salen bajos) */
 static u32 st_rate = ST_RATE;                   /* cuadros por segundo del flujo (op 4 lo cambia) */
 static u32 st_frac;
 static int st_l0, st_r0, st_l1, st_r1;
@@ -425,8 +426,8 @@ static void st_pop(int *l, int *r)
 static void st_mix(int *l, int *r)
 {
     /* los efectos de Doom salen bajos (~-26 dB): ganancia x6; mix_chunk() recorta lo que pase de 16 bits */
-    *l += 6 * (st_l0 + (int)(((long long)(st_l1 - st_l0) * (int)st_frac) >> 16));
-    *r += 6 * (st_r0 + (int)(((long long)(st_r1 - st_r0) * (int)st_frac) >> 16));
+    *l += st_gain * (st_l0 + (int)(((long long)(st_l1 - st_l0) * (int)st_frac) >> 16));
+    *r += st_gain * (st_r0 + (int)(((long long)(st_r1 - st_r0) * (int)st_frac) >> 16));
     st_frac += (u32)(((u64)st_rate << 16) / RATE);
     while (st_frac >= 65536) {
         st_frac -= 65536;
@@ -444,6 +445,7 @@ int audio_stream_ctl(int op, const void *data, u32 n)
             return 0;
         st_head = st_tail = 0;
         st_rate = ST_RATE;
+        st_gain = 6;
         st_frac = 0;
         st_l0 = st_r0 = st_l1 = st_r1 = 0;
         st_on = 1;
@@ -470,6 +472,10 @@ int audio_stream_ctl(int op, const void *data, u32 n)
     case 3:
         audio_service();                        /* "sigo vivo": que el anillo no se quede sin relleno (silencio, no bucle) */
         return (int)(st_head - st_tail);
+    case 5:                                     /* ganancia del flujo 1..16 (por defecto 6) */
+        if (n >= 1 && n <= 16)
+            st_gain = (int)n;
+        return st_gain;
     case 4:                                     /* tasa de muestreo del flujo: 4000..48000 Hz */
         if (n >= 4000 && n <= 48000)
             st_rate = n;

@@ -18,7 +18,7 @@
 #ifndef KAPI_H
 #define KAPI_H
 
-#define KAPI_VER 4
+#define KAPI_VER 5
 #define FONT_ADDR 0x6800            /* fuente 8x16: 16 bytes por caracter, 256 caracteres */
 
 /* tipos de SOUND (los usa tambien el kernel) */
@@ -134,6 +134,11 @@ struct kapi {
     /* (ver 4) programa BASIC guardado con SAVE (el almacen del disco de arranque): copia su texto a buf.
      *   Devuelve los bytes (<= max) o < 0 si no existe. Lo usa PKG para subir programas al hub. */
     int  (*saved)(const char *name, char *buf, int max);
+    /* (ver 5) para los programas compilados con bas2bin (tools/bas2bin): ejecutar una sentencia o evaluar una expresion
+     * del interprete sin imprimir READY y sin tocar el programa que este corriendo. 0 = bien, -1 = error (ya impreso). */
+    int  (*basic_do)(const char *stmt);
+    int  (*basic_eval)(const char *expr, int *val);
+    int  (*col)(void);                                 /* columna del cursor de texto en la consola actual */
 };
 
 /* codigos de retorno de mod_main */

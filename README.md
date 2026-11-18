@@ -98,6 +98,7 @@ PKG, INSTALL) se compila para 32 bits.
 | `hda.c` | Audio Intel HDA: CORB/RIRB, descubre la ruta pin→DAC y reproduce un tono por DMA |
 | `kbd.c` | Teclado PS/2 (set 1, distribución español ISO: Shift+2 = `"`, AltGr+2 = `@`, ñ ç ¿ ¡, AltGr para `# | ~ [ ] { } \`; sin teclas muertas). Letras en MAYÚSCULAS; Shift o Bloq Mayús = minúsculas. Cursor parpadeante |
 | `lib.c` | `memset`, `memcpy`, `memmove`, `memcmp`, `strlen` |
+| `tools/cosmos/` + `sys/cosmosapp.c` | Navegador COSMOS: motor MM de Cosmos Browser (`html.c`, `layout.c`), libc mínima, pintado y red (`cosmosmm.c`) → `COSMOS.BIN` en la partición FAT; `COSMOS.APP` lo carga |
 | `basic.c` | El intérprete de BASIC (sin dependencias de hardware) |
 | `sys/pkg.c` | PKG.APP: tienda de paquetes (lista, descarga por HTTPS, SHA-256, ejecuta `.BIN` o carga `.BAS`; **S** sube paquetes al hub) |
 | `sys/install.c` | INSTALL.APP: instala el sistema en otro disco o en el mismo USB (particion + FAT16 "BASIC-OS FS") |
@@ -316,6 +317,31 @@ archivo de la partición (`HD0.1:APPS/MIAPP.BIN`), el nombre en el hub y una des
 Los programas son modulos PCBM enlazados a **0x9000000**; `make store` compila `apps/*.c` a `store/*.BIN`. Necesita ~180 MB de RAM (QEMU: `-m 256 -nic user,model=e1000`).
 La direccion del hub va en `HUB.CFG` (`make pc-basic-doom.img HUB_URL=https://...`) o se escribe con la tecla `U`; no hay una por defecto a proposito.
 Guia completa de despliegue y seguridad: [`hub/README.md`](hub/README.md).
+
+## Navegador COSMOS (Minimal Motor de Cosmos Browser)
+Icono **COSMOS** en el escritorio (tecla **N**) o `EXEC "COSMOS.APP"` desde BASIC. Es una **ventana** del escritorio (se puede mover,
+maximizar y cambiar de tamaño: la página se vuelve a maquetar al ancho nuevo).
+
+- **Motor:** el *Minimal Motor (MM)* de Cosmos Browser (COS-Mods): `html.c` (HTML + CSS: selectores, cascada, variables, `@media`, `calc()`)
+  y `layout.c` (bloques, líneas, listas, tablas, flex/grid básico) **tal cual**, copiados en `tools/cosmos/`. Lo que en Linux hacen `gfx.c`,
+  `net.c` y `main.c` está en `tools/cosmos/cosmosmm.c`: texto con la fuente 8x16 del sistema (CP437, acentos y ñ incluidos; títulos grandes a 2x/3x,
+  negrita con doble trazo), colores `#RRGGBB` al más cercano de los 16 del C64 (los fondos pálidos se tramean con dos colores) y corrección de
+  contraste para que el texto siempre se lea. `libc.c` es la libc mínima que pide el motor (malloc con listas libres en un montón de 27 MB que se
+  vacía de golpe al cambiar de página, `snprintf`, `strtod`...). El motor usa `float`: se compila con SSE2 y lo enciende en cada llamada (como SAY).
+- **Red:** carga `NET.BIN` (iPXE) por su cuenta y le pasa `dhcp; set u0 ...; imgfetch ${u0}${u1}...; bosstash` (la URL va troceada en variables de
+  iPXE, así no hay límite de 160 letras). HTTP y HTTPS (los mismos certificados que PKG). La salida de iPXE se guarda y aparece en la página de error.
+  Cada página tarda ~3 s de más por el `dhcp`.
+- **Archivos locales:** escribe `HD0.1:PAGINA.HTM` (o `USB0.1:...`) en la barra.
+- **Barra:** `<` atrás · `>` adelante · `R` recargar · casa = inicio. Si escribes palabras sueltas (sin punto) se buscan en DuckDuckGo Lite;
+  `algo.com` se abre como `https://algo.com`; `10.x`/`192.168.x`/`localhost` como `http://`.
+- **Teclas:** **Enter** ir · **Tab** entrar/salir de la barra · con la página activa, empezar a escribir abre una dirección nueva ·
+  **↑ ↓** desplazar · **Espacio** página siguiente · **←** o **Retroceso** atrás · **→** adelante. Ratón: clic en enlaces (la barra de estado
+  muestra a dónde van), clic/arrastre en la barra de desplazamiento.
+- **No hay (todavía):** JavaScript, imágenes, hojas de estilo externas (`<link rel=stylesheet>`), formularios y scroll horizontal.
+  iPXE no entrega las páginas de error del servidor (404...), solo dice que falló.
+- **Imagen:** `COSMOS.BIN` (~110 KB, enlazado a 0x7000000; montón 0x7400000-0x8F00000) va en la partición FAT de `pc-basic-doom.img`,
+  `pc-basic-video.img` y `super-basicos.img`, junto a `NET.BIN`. Necesita ~180 MB de RAM por `bosstash` (QEMU: `-m 256 -nic user,model=e1000`).
+  Solo 64 bits. Para probar sin internet: `python3 -m http.server 8000` en el host y en COSMOS `10.0.2.2:8000/`.
 
 ## DOOM
 Icono **DOOM** en el escritorio (tecla **D**) o `EXEC "DOOM.APP"` desde BASIC. Corre **a pantalla completa**, sin ventana: escribe directo

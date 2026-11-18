@@ -13,9 +13,12 @@
  * Subir (S): un programa guardado con SAVE (se sube como NOMBRE.BAS) o un archivo de la particion (HD0.1:RUTA/X.BIN).
  *   Viaja por HTTPS como POST a HUB/upload con NET.BIN (comando bospost). El hub pide una clave: la segunda linea de
  *   HUB.CFG, o la que escribas. Maximo 2 MB por paquete.
+ * Compilar (C): convierte un programa BASIC (guardado con SAVE o un .BAS de la particion) en NOMBRE.BIN con bas2bin
+ *   (tools/bas2bin): nativo (x86-64, rapido) o empaquetado (todo el BASIC). Se guarda en HDn.1:/APPS/.
  */
 #include "kapi.h"
 #include "mod_head.h"
+#include "tools/bas2bin/b2b.c"                 /* el compilador de .BAS a .BIN (mismo codigo que en Linux) */
 
 typedef unsigned char u8;
 typedef unsigned short u16;
@@ -644,7 +647,7 @@ static void show_list(void)
         if (apps[i].desc[0]) { pr("  - "); pr(apps[i].desc); }
         pr("\n");
     }
-    pr("\nNumero = ejecutar (del disco si ya esta, si no se baja y se guarda)   +N = bajar otra vez   -N = borrar del disco\nS = subir un paquete   R = recargar   U = hub   Q = salir\n");
+    pr("\nNumero = ejecutar (del disco si ya esta, si no se baja y se guarda)   +N = bajar otra vez   -N = borrar del disco\nS = subir un paquete   C = compilar un .BAS a .BIN   R = recargar   U = hub   Q = salir\n");
 }
 
 /* leer una linea corta con eco; devuelve la longitud, -1 si ESC */
@@ -889,6 +892,70 @@ static void upload(void)
     }
 }
 
+/* ---- compilar un .BAS a .BIN con bas2bin ---- */
+#define B2B_SRC  0xA000000u                     /* texto del programa (64 KB) */
+#define B2B_OUT  0xA100000u                     /* el .BIN compilado (hasta 14 MB) */
+#define B2B_OMAX 0xE00000u
+
+static void compile_bas(void)
+{
+    char what[64], name[16], msg[120];
+#ifndef B2B_NO_NATIVE
+    char mode[8];
+#endif
+    char *src = (char *)(unsigned long)B2B_SRC;
+    unsigned char *outb = (unsigned char *)(unsigned long)B2B_OUT;
+    unsigned total = 0;
+    int n, i, colon = 0, last = 0, nat = 1, r;
+
+    pr("\nCOMPILAR A .BIN. Que programa?\n"
+       "  NOMBRE              uno guardado con SAVE\n"
+       "  HD0.1:RUTA/X.BAS    un archivo de la particion\n> ");
+    if (readline(what, sizeof what, 0) <= 0)
+        return;
+    for (i = 0; what[i]; i++)
+        if (what[i] == ':') colon = 1;
+    if (colon) {
+        n = K->read(what, src, 65535, &total);
+        if (n < 0) { pr("PKG: no pude leer ese archivo.\n"); return; }
+        if (total > 65535) { pr("PKG: el programa es demasiado grande.\n"); return; }
+        for (i = 0; what[i]; i++)
+            if (what[i] == ':' || what[i] == '/' || what[i] == '\\') last = i + 1;
+        up_name(name, what + last, ".BIN");
+    } else {
+        n = K->saved(what, src, 65535);
+        if (n < 0) { pr("PKG: no hay un programa guardado con ese nombre (mira DIR).\n"); return; }
+        up_name(name, what, ".BIN");
+    }
+#ifdef B2B_NO_NATIVE
+    pr("(PC BASIC de 32 bits: se empaqueta, el modo nativo es solo de 64 bits)\n");
+    nat = 0;
+#else
+    pr("Modo:  N = nativo (codigo x86-64, mucho mas rapido)   P = empaquetado (todo el BASIC)  [N]: ");
+    if (readline(mode, sizeof mode, 0) < 0) return;
+    nat = !(mode[0] == 'P' || mode[0] == 'p');
+#endif
+    pr("Compilando "); pr(what); pr(nat ? " (nativo) ...\n" : " (empaquetado) ...\n");
+    r = b2b_compile(src, n, nat, outb, (int)B2B_OMAX, msg, (int)sizeof msg);
+    if (r < 0) {
+        pr("bas2bin: "); pr(msg); pr("\n");
+        if (nat) pr("(si usa algo que el compilador no entiende, prueba el modo P)\n");
+        return;
+    }
+    pr("Listo: "); pr(name); pr(" ("); prsize((unsigned)r); pr(")\n");
+    if (fw.ok) {
+        char sp[40];
+        int e = fw_save(name, outb, (u32)r);
+        if (e) { pr("PKG: no pude guardarlo en el disco (codigo "); prnum((unsigned)e); pr(")\n"); return; }
+        fw_spec(sp, name);
+        pr("Guardado en "); pr(sp); pr(". Corre con su numero en la lista; subelo con S y esa ruta.\n");
+    } else {
+        pr("(no hay disco FAT16 de la BIOS para guardarlo: se ejecuta desde la RAM)\n");
+        memcpy((void *)(unsigned long)APP_BASE, outb, (unsigned long)r);
+        launch(name, (u32)r);
+    }
+}
+
 static void ask_hub(void)
 {
     char buf[96];
@@ -933,7 +1000,7 @@ int mod_main(const struct kapi *k)
         if (napps)
             show_list();
         else
-            pr("\nU = direccion del hub   S = subir un paquete   R = reintentar   Q = salir\n");
+            pr("\nU = direccion del hub   S = subir un paquete   C = compilar un .BAS   R = reintentar   Q = salir\n");
         pr("> ");
         n = readline(line, sizeof line, 0);
         if (n < 0 || line[0] == 'q' || line[0] == 'Q' || line[0] == 0)
@@ -942,6 +1009,13 @@ int mod_main(const struct kapi *k)
             ask_hub();
             loaded = hub[0] ? fetch_list() : 0;
             if (!loaded) napps = 0;
+            merge_disk();
+            continue;
+        }
+        if (line[0] == 'c' || line[0] == 'C') {
+            compile_bas();
+            if (bas_loaded)
+                break;
             merge_disk();
             continue;
         }

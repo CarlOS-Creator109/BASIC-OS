@@ -181,7 +181,8 @@ const struct kapi kernel_api = {
     kbd_rawin,
     audio_stream_ctl,
     (int (*)(const char *, int, unsigned long long, unsigned, void *))blk_api,
-    api_saved
+    api_saved,
+    basic_do, basic_eval, vga_col
 };
 
 static int is_gui(const char *n)
