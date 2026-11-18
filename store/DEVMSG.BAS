@@ -1,0 +1,7 @@
+10 ? "Hello, im a creator for this OS, This a Curiosity OS, Yeah?"
+20 ? "haha, im a clown"
+30 ? "this OS is a create for im"
+40 ? "and programs for you and comiunuty (PKG) the natives is a my creation"
+50 ? "Note: im a not native for english, sorry"
+60 ? "Im a Mexican, and you? (not respond a question, is a text of program basic)"
+70 ? "my name is Carlos Jo-, Godbye."
