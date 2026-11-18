@@ -278,6 +278,31 @@ Probado en QEMU: disco vacio, y el mismo disco con subcarpetas y nombres largos 
 
 > HTTPS con Render: Render manda la raiz "GTS Root R4" con firma cruzada de GlobalSign; iPXE solo reconoce raices por huella, asi que `tools/net/build.sh` aplica `x509-cross-signed-roots.patch` (acepta un certificado cuyo nombre y llave publica coinciden con una raiz de confianza). Probado en QEMU con una cadena igual a la de Render.
 
+## Atajos para gente de UNIX/Linux
+`LS` = `DIR`, `CAT`/`MORE`/`LESS` = `TYPE`, `RM` = `SCRATCH`, `CLEAR` = `CLS`, `MAN` = `HELP`, `LSBLK`/`DF` = `DRIVES`,
+`LSPCI` = `PCI`. Aceptan el argumento sin comillas: `LS HD0.1:`, `CAT HD0.1:LEEME.TXT`, `RM JUEGO`. `UNIX` muestra la
+tabla de equivalencias; `CP`, `MV`, `MKDIR`, `CD`... avisan que no existen todavia (para bash de verdad: `BASHTERM`).
+
+## Compilar BASIC a .BIN (bas2bin)
+`tools/bas2bin` convierte un programa de PC BASIC en un `.BIN` de la tienda (módulo enlazado a 0x9000000) que PKG
+ejecuta y que se puede subir al hub. Mismo código en Linux y dentro del sistema:
+
+```
+make bas2bin                                   # tools/bas2bin/bas2bin
+tools/bas2bin/bas2bin JUEGO.BAS JUEGO.BIN      # nativo (por defecto)
+tools/bas2bin/bas2bin -p JUEGO.BAS JUEGO.BIN   # empaquetado
+```
+En el sistema: `PKG`, tecla **C**, el nombre de un programa guardado con `SAVE` o la ruta de un `.BAS`
+(`HD0.1:DEMO.BAS`), y el modo. El `.BIN` queda en `HDn.1:/APPS/` y aparece en la lista; con **S** se sube.
+
+- **Nativo:** traduce el BASIC a código x86-64 (unas 30 veces más rápido que el intérprete en bucles). Compila
+  aritmética, `IF/GOTO/GOSUB/FOR/NEXT`, `PRINT`, `INPUT`, cadenas y sus funciones. Las sentencias que no conoce
+  (`PLOT`, `SOUND`, `LOCATE`, `POKE`, `CLS`...) y funciones como `PEEK` o `XMAX` las calcula en nativo y se las
+  pasa al intérprete ya con números (kapi 5: `basic_do`/`basic_eval`). Errores como `GOTO` a una línea que no existe
+  o mezclar números y cadenas salen al compilar, no al correr. Solo PC BASIC de 64 bits.
+- **Empaquetado:** el `.BIN` lleva el texto y lo corre el intérprete: todo el lenguaje, misma velocidad. Funciona
+  también en 32 bits.
+
 ## Tienda de programas (PKG + hub)
 `PKG` (o `EXEC "PKG.APP"`) baja por Ethernet y HTTPS la lista de programas de un **hub** (`hub/server.py`, pensado para Render, que a su vez los toma de la
 carpeta `store/` de tu repo de GitHub), te deja elegir uno, comprueba su SHA-256 y lo ejecuta.

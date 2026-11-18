@@ -1645,8 +1645,9 @@ static void st_help(void)
     puts_("SOUND KICK|SNARE,HZ,MS  HIHAT,MS  OFF\n");
     puts_("SOUND DRUMKIT,HZ,KIT(0-3),MS  SNDWAIT\n");
     puts_("CDTOC CDPLAY [N] CDSTOP CDEJECT CDSTAT\n");
-    puts_("DESKTOP  YAAI  BASHTERM  TINYCORE  NET  PKG  INSTALL  EXEC \"X.APP\"  LOAD \"\" = PONG\n");
+    puts_("DESKTOP  YAAI  BASHTERM  TINYCORE  NET  PKG  INSTALL  PLAY \"X.BVC\"  SAY \"TEXTO\"  EXEC \"X.APP\"  LOAD \"\" = PONG\n");
     puts_("LOCATE COL,ROW  (TEXT CURSOR)\n");
+    puts_("UNIX = LS CAT RM CLEAR MAN... (ATAJOS PARA LINUX)\n");
     puts_("PCI = LIST PCI DEVICES\n");
     puts_("MOUSE: DRAG=COPY  RIGHT/MIDDLE=PASTE\n");
     puts_("MOUSEX MOUSEY MOUSEB (1=L 2=R 4=M)\n");
@@ -1655,6 +1656,67 @@ static void st_help(void)
     puts_("AND OR XOR NOT MOD   ESC = BREAK\n");
     puts_("POKE 53280,C BORDER  53281,C BACKGROUND\n");
     puts_("POKE 646,C TEXT COLOR (C64 COLORS 0-15)\n");
+}
+
+/* ---- atajos para quien viene de UNIX/Linux: LS, CAT, RM, CLEAR, MAN y pistas para el resto ----
+ * Aceptan el argumento sin comillas (LS HD0.1:  CAT HD0.1:LEEME.TXT): se le ponen las comillas y se llama al
+ * comando de BASIC de verdad. Sin comillas el argumento llega hasta el final de la linea (o hasta " :"). */
+static char alias_buf[LINE_LEN + 2];
+
+static const char *alias_quote(void)             /* devuelve donde sigue la linea despues del argumento */
+{
+    const char *rest;
+    int n = 0;
+    skip_ws();
+    if (*tp == '"' || *tp == 0 || *tp == ':')
+        return 0;                                /* ya trae comillas, o no hay argumento */
+    alias_buf[n++] = '"';
+    while (*tp && n < LINE_LEN - 1) {            /* el ':' es parte de HD0.1:...; separa solo " :" */
+        if (tp[0] == ' ' && tp[1] == ':')
+            break;
+        alias_buf[n++] = *tp++;
+    }
+    while (n > 1 && alias_buf[n - 1] == ' ')
+        n--;
+    alias_buf[n++] = '"';
+    alias_buf[n] = 0;
+    rest = tp;
+    tp = alias_buf;
+    return rest;
+}
+
+static void unix_hint(const char *cmd, const char *what)
+{
+    puts_("?");
+    puts_(cmd);
+    puts_(": ");
+    puts_(what);
+    plat_putc('\n');
+}
+
+static const char *unix_last;
+static int unix_word(void)                       /* comandos de UNIX que no existen aqui */
+{
+    static const char *const w[] = { "CP", "MV", "MKDIR", "RMDIR", "TOUCH", "CD", "PWD", "NANO", "VI", "VIM",
+                                     "SUDO", "EXIT", "CHMOD", "GREP", "ECHO", 0 };
+    int i;
+    for (i = 0; w[i]; i++)
+        if (kw(w[i])) { unix_last = w[i]; return 1; }
+    return 0;
+}
+
+static void st_unix_table(void)
+{
+    puts_("UNIX/LINUX        PC BASIC\n");
+    puts_("LS [DISCO:]       DIR [\"HD0.1:\"]\n");
+    puts_("CAT ARCHIVO       TYPE \"HD0.1:ARCHIVO\"\n");
+    puts_("RM NOMBRE         SCRATCH \"NOMBRE\"  (PROGRAMAS DE SAVE)\n");
+    puts_("CLEAR             CLS\n");
+    puts_("MAN               HELP\n");
+    puts_("./PROG.BAS        LOAD \"HD0.1:PROG.BAS\" Y LUEGO RUN\n");
+    puts_("LSBLK / DF        DRIVES\n");
+    puts_("LSPCI             PCI\n");
+    puts_("CP MV MKDIR CD    TODAVIA NO: USA BASHTERM (BASH DE VERDAD)\n");
 }
 
 static void exec_statement(void)
@@ -1719,6 +1781,29 @@ static void exec_statement(void)
         st_dir();
     } else if (kw("TYPE")) {
         st_type();
+    } else if (kw("LS")) {
+        const char *rest = alias_quote();
+        st_dir();
+        if (rest && !err) tp = rest;
+    } else if (kw("CAT") || kw("MORE") || kw("LESS")) {
+        const char *rest = alias_quote();
+        st_type();
+        if (rest && !err) tp = rest;
+    } else if (kw("RM")) {
+        const char *rest = alias_quote();
+        st_scratch();
+        if (rest && !err) tp = rest;
+    } else if (kw("CLEAR")) {
+        plat_clear();
+    } else if (kw("MAN")) {
+        st_help();
+    } else if (kw("UNIX")) {
+        st_unix_table();
+    } else if (kw("LSBLK") || kw("DF")) {
+        st_drives();
+    } else if (unix_word()) {
+        unix_hint(unix_last, "NO EXISTE EN PC BASIC. ESCRIBE UNIX PARA VER LOS EQUIVALENTES (O BASHTERM PARA BASH)");
+        skip_rest();
     } else if (kw("AUDIO")) {
         puts_(plat_audio_info());
         plat_putc('\n');
@@ -1726,7 +1811,7 @@ static void exec_statement(void)
         st_drives();
     } else if (kw("SCRATCH") || kw("DELETE")) {
         st_scratch();
-    } else if (kw("PCI")) {
+    } else if (kw("PCI") || kw("LSPCI")) {
         char ln[64];
         int i;
         for (i = 0; plat_pci_line(i, ln); i++) {
@@ -1777,6 +1862,34 @@ static void exec_statement(void)
             net_args[i] = 0;
         }
         r = plat_exec("NET.APP");
+        if (r < 0)
+            exec_fail(r);
+    } else if (kw("PLAY")) {
+        int r, i;
+        net_args[0] = 0;
+        skip_ws();
+        if (*tp == '"') {
+            if (!get_spec())
+                return;
+            for (i = 0; spec[i] && i < (int)sizeof net_args - 1; i++)
+                net_args[i] = spec[i];
+            net_args[i] = 0;
+        }
+        r = plat_exec("PLAY.APP");
+        if (r < 0)
+            exec_fail(r);
+    } else if (kw("SAY")) {
+        int r, i;
+        net_args[0] = 0;
+        skip_ws();
+        if (*tp && *tp != ':') {
+            if (!get_spec())
+                return;
+            for (i = 0; spec[i] && i < (int)sizeof net_args - 1; i++)
+                net_args[i] = spec[i];
+            net_args[i] = 0;
+        }
+        r = plat_exec("SAY.APP");
         if (r < 0)
             exec_fail(r);
     } else if (kw("PKG")) {
@@ -1880,6 +1993,55 @@ static void run_loop(void)
             running = 0;
         }
     }
+}
+
+/* ---- para los programas compilados (kapi 5): una sentencia o expresion suelta, guardando el estado ---- */
+struct qstate { const char *tp; int pc, running, jumped; const char *err; };
+static void q_save(struct qstate *s) { s->tp = tp; s->pc = pc; s->running = running; s->jumped = jumped; s->err = err; }
+static void q_load(const struct qstate *s) { tp = s->tp; pc = s->pc; running = s->running; jumped = s->jumped; err = s->err; }
+
+int basic_do(const char *stmt)
+{
+    static char qbuf[4][LINE_LEN];             /* una sentencia puede llamar a otra (EXEC dentro de EXEC...) */
+    static int qdepth;
+    struct qstate s;
+    int bad;
+    if (qdepth >= 4)
+        return -1;
+    q_save(&s);
+    normalize(qbuf[qdepth], stmt);
+    tp = qbuf[qdepth++];
+    pc = -1;
+    err = 0;
+    running = 1;
+    jumped = 0;
+    run_loop();
+    bad = err != 0;
+    qdepth--;
+    q_load(&s);
+    return bad ? -1 : 0;
+}
+
+int basic_eval(const char *e, int *val)
+{
+    static char ebuf[LINE_LEN];
+    struct qstate s;
+    int v, bad;
+    q_save(&s);
+    normalize(ebuf, e);
+    tp = ebuf;
+    err = 0;
+    v = expr();
+    skip_ws();
+    if (!err && *tp)
+        err = "SYNTAX  ERROR";
+    if (err)
+        report_error();
+    bad = err != 0;
+    q_load(&s);
+    if (!bad && val)
+        *val = v;
+    return bad ? -1 : 0;
 }
 
 int basic_bytes_free(void)
