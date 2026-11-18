@@ -16,6 +16,8 @@ grep -q basicos_umalloc "$S/include/ipxe/umalloc.h" || \
   sed -i 's|#include <ipxe/uheap.h>|#include <ipxe/uheap.h>\n#include <ipxe/basicos/basicos_umalloc.h>|' "$S/include/ipxe/umalloc.h"
 # raices con firma cruzada (Render/Google Trust Services): ver tools/net/x509-cross-signed-roots.patch
 grep -q "BASICOS: cross-signed roots" "$S/crypto/x509.c" || patch -p1 -d "$W/ipxe" < "$HERE/x509-cross-signed-roots.patch"
+# subir paquetes: POST con un bloque de memoria como cuerpo (comando bospost de PKG.APP)
+grep -q "BASICOS: lo pone bospost" "$S/net/tcp/httpcore.c" || patch -p1 -d "$W/ipxe" < "$HERE/http-post.patch"
 cp "$HERE/local/"*.h "$S/config/local/" 2>/dev/null || true
 # HTTPS (Render, GitHub...): iPXE solo confia en los certificados raiz que se le den al compilar.
 #   por defecto: el paquete de CAs de Mozilla del sistema (/etc/ssl/certs/ca-certificates.crt), cada raiz separada

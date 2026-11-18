@@ -136,6 +136,7 @@ static int  api_read(const char *spec, char *buf, int max, unsigned int *total)
 static int  api_exec(const char *name)    { return mod_exec(name, 0); }
 static int  api_load_basic(const char *t, int n) { basic_load_text(t, n); return 0; }
 static unsigned int api_seed(void)        { return plat_seed(); }
+static int  api_saved(const char *name, char *buf, int max) { return store_load(name, buf, max); }
 static int  api_scr_w(void)               { return vga_gui_active() ? vga_main_w() : 0; }
 static int  api_scr_h(void)               { return vga_gui_active() ? vga_main_h() : 0; }
 /* numeracion de kapi.h: 0 FB0, 1 FB1, 2 FB2, 3 FB3, 4 plano del escritorio (internas 0, 1, 3, 4, 2) */
@@ -179,7 +180,8 @@ const struct kapi kernel_api = {
     (void *(*)(unsigned long long, unsigned))map_mmio, net_args,
     kbd_rawin,
     audio_stream_ctl,
-    (int (*)(const char *, int, unsigned long long, unsigned, void *))blk_api
+    (int (*)(const char *, int, unsigned long long, unsigned, void *))blk_api,
+    api_saved
 };
 
 static int is_gui(const char *n)
@@ -273,7 +275,7 @@ void kmain(void)
     vga_splash(0, "INICIANDO...");
     mouse_init();
     vga_splash(15, "DETECTANDO HARDWARE");
-    vga_puts("\nPC BASIC V1.2 (64-BIT)\n\n");
+    vga_puts("\nPC BASIC V1.2 (" BITS_STR ")\n\n");
     sysinfo_print();
     vga_splash(45, "CARGANDO BASIC");
     basic_init();

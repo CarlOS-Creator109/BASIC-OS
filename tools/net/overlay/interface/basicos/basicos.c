@@ -23,6 +23,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/entropy.h>
 #include <ipxe/command.h>
 #include <ipxe/image.h>
+#include <usr/imgmgmt.h>
 #include <ipxe/io.h>
 #include <rtc.h>
 
@@ -515,3 +516,53 @@ static int bosstash_exec ( int argc, char **argv ) {
 	return 0;
 }
 COMMAND ( bosstash, bosstash_exec );
+
+/* ======================================================================== */
+/* bospost <url> : sube al hub lo que PKG.APP dejo en 0x9000000 (el tamano    */
+/* va en mbox->spare). Hace un POST con el bloque crudo como cuerpo (ver      */
+/* tools/net/http-post.patch) y deja la respuesta del hub (texto) en la       */
+/* memoria de la lista (0xB000000, mbox->list_len). iPXE copia el cuerpo a su */
+/* heap de 4 MB, por eso el limite es BOS_POST_MAX.                           */
+/* ======================================================================== */
+#define BOS_POST_MAX	0x200000UL
+
+extern const void *bos_post_data;
+extern size_t bos_post_len;
+
+static int bospost_exec ( int argc, char **argv ) {
+	struct bos_mbox *mb = ( struct bos_mbox * ) BOS_STASH_MBOX;
+	struct image *image;
+	size_t n;
+	int rc;
+	if ( argc != 2 ) {
+		printf ( "uso: bospost <url>\n" );
+		return -EINVAL;
+	}
+	if ( find_ram_top() < BOS_STASH_MBOX + 0x1000UL ) {
+		printf ( "bospost: hace falta mas RAM (~180 MB; en QEMU usa -m 256)\n" );
+		return -ENOMEM;
+	}
+	if ( mb->magic != 0x48545342u || mb->spare == 0 || mb->spare > BOS_POST_MAX ) {
+		printf ( "bospost: no hay nada que subir (o pasa de 2 MB)\n" );
+		return -EINVAL;
+	}
+	bos_post_data = ( const void * ) BOS_STASH_APP;
+	bos_post_len = mb->spare;
+	rc = imgdownload_string ( argv[1], 0, 0, &image );
+	bos_post_data = NULL;
+	bos_post_len = 0;
+	mb->spare = 0;
+	mb->list_len = 0;
+	if ( rc != 0 ) {
+		printf ( "bospost: el hub no acepto la subida (%s)\n", strerror ( rc ) );
+		return rc;
+	}
+	n = image->len;
+	if ( n > BOS_STASH_LISTMAX )
+		n = BOS_STASH_LISTMAX;
+	memcpy ( ( void * ) BOS_STASH_LIST, image->data, n );
+	mb->list_len = n;
+	unregister_image ( image );
+	return 0;
+}
+COMMAND ( bospost, bospost_exec );

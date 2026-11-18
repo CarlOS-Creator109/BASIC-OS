@@ -8,7 +8,11 @@
  * Direccion del hub: primera linea de HUB.CFG en la particion FAT (HD0.1:HUB.CFG ...) o la que escribas con U.
  * No hay direccion por defecto a proposito: PKG ejecuta lo que baja, asi que solo habla con el hub que tu pongas.
  * Uso:  PKG   (o EXEC "PKG.APP")     Teclas: numero + Enter = ejecutar (del disco si ya esta), +numero = bajar otra vez,
- *       -numero = borrar del disco, R = recargar, U = direccion del hub, Q/ESC = salir.
+ *       -numero = borrar del disco, S = subir un paquete al hub, R = recargar, U = direccion del hub, Q/ESC = salir.
+ * Paquetes: NOMBRE.BIN (modulo PCBM, se ejecuta) o NOMBRE.BAS (programa BASIC en texto: se carga y se escribe RUN).
+ * Subir (S): un programa guardado con SAVE (se sube como NOMBRE.BAS) o un archivo de la particion (HD0.1:RUTA/X.BIN).
+ *   Viaja por HTTPS como POST a HUB/upload con NET.BIN (comando bospost). El hub pide una clave: la segunda linea de
+ *   HUB.CFG, o la que escribas. Maximo 2 MB por paquete.
  */
 #include "kapi.h"
 #include "mod_head.h"
@@ -140,14 +144,24 @@ static int streq(const char *a, const char *b)
 }
 
 /* ---- direccion del hub ---- */
+static int streq_n(const char *a, const char *b, int n)
+{
+    int i;
+    for (i = 0; i < n; i++)
+        if (a[i] != b[i] || !a[i])
+            return 0;
+    return 1;
+}
+
 static char hub[96];
+static char hubkey[64];
 
 static void load_cfg(void)
 {
     static const char *const where[] = {
         "HD0.1:HUB.CFG", "HD1.1:HUB.CFG", "HD2.1:HUB.CFG", "HD0:HUB.CFG", "FD1:HUB.CFG", "USB0.1:HUB.CFG", 0
     };
-    char buf[96];
+    char buf[200];
     unsigned total = 0;
     int i, n;
     for (i = 0; where[i]; i++) {
@@ -162,6 +176,14 @@ static void load_cfg(void)
             while (k > 0 && hub[k - 1] == '/')
                 k--;
             hub[k] = 0;
+            {   int q = 0;                          /* segunda linea (opcional): clave para subir paquetes */
+                while (j < n && buf[j] != '\n')
+                    j++;
+                while (j < n && (buf[j] == ' ' || buf[j] == '\r' || buf[j] == '\n'))
+                    j++;
+                while (j < n && buf[j] > ' ' && q < (int)sizeof hubkey - 1)
+                    hubkey[q++] = buf[j++];
+                hubkey[q] = 0; }
             if (k > 8)
                 return;
         }
@@ -622,7 +644,7 @@ static void show_list(void)
         if (apps[i].desc[0]) { pr("  - "); pr(apps[i].desc); }
         pr("\n");
     }
-    pr("\nNumero = ejecutar (del disco si ya esta, si no se baja y se guarda)   +N = bajar otra vez   -N = borrar del disco\nR = recargar   U = hub   Q = salir\n");
+    pr("\nNumero = ejecutar (del disco si ya esta, si no se baja y se guarda)   +N = bajar otra vez   -N = borrar del disco\nS = subir un paquete   R = recargar   U = hub   Q = salir\n");
 }
 
 /* leer una linea corta con eco; devuelve la longitud, -1 si ESC */
@@ -648,10 +670,24 @@ static int readline(char *buf, int max, int invert)
     }
 }
 
+static int is_bas(const char *name)
+{
+    int n = (int)strlen(name);
+    return n > 4 && name[n - 4] == '.' && (name[n - 3] | 32) == 'b' && (name[n - 2] | 32) == 'a' && (name[n - 1] | 32) == 's';
+}
+
+static int bas_loaded;                          /* 1 = se cargo un .BAS: PKG sale para que el usuario escriba RUN */
+
 static int launch(const char *name, u32 n)
 {
     const struct hdr *h = (const struct hdr *)(unsigned long)APP_BASE;
     int (*entry)(const struct kapi *);
+    if (is_bas(name)) {
+        K->load_basic((const char *)(unsigned long)APP_BASE, (int)n);
+        pr("Programa BASIC "); pr(name); pr(" cargado. Escribe RUN (o LIST para verlo; SAVE para guardarlo).\n");
+        bas_loaded = 1;
+        return 1;
+    }
     if (n < sizeof *h || h->magic != 0x4D424350u || h->base != APP_BASE || h->end < APP_BASE + n ||
         h->end > APP_BASE + APP_MAX || h->entry < APP_BASE || h->entry >= APP_BASE + n) {
         pr("PKG: no es un modulo de BASIC-OS valido para la tienda (debe enlazarse a 0x9000000)\n");
@@ -721,6 +757,138 @@ static int run_app(int i)
     return launch(apps[i].name, n);
 }
 
+/* ---- subir un paquete al hub ---- */
+#define POST_MAX 0x200000u                      /* lo que acepta bospost (el heap de iPXE es de 4 MB) */
+#define POST_DATA (APP_BASE + 4096u)            /* el archivo se lee aqui y luego se pega detras de la cabecera */
+
+static int name_ok(const char *n)              /* NOMBRE.BIN / NOMBRE.BAS, 8.3 */
+{
+    int i = 0;
+    while (n[i] && n[i] != '.') {
+        char c = n[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '~') || i >= 8)
+            return 0;
+        i++;
+    }
+    if (i == 0 || n[i] != '.')
+        return 0;
+    return streq(n + i, ".BIN") || streq(n + i, ".BAS");
+}
+
+static void up_name(char *dst, const char *src, const char *ext)   /* nombre 8.3 en mayusculas desde cualquier texto */
+{
+    int k = 0, i;
+    for (i = 0; src[i] && src[i] != '.' && k < 8; i++) {
+        char c = src[i];
+        if (c >= 'a' && c <= 'z') c -= 32;
+        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '~')) c = '_';
+        dst[k++] = c;
+    }
+    if (!k) dst[k++] = 'X';
+    while (*ext) dst[k++] = *ext++;
+    dst[k] = 0;
+}
+
+static void upload(void)
+{
+    char what[64], name[16], desc[64], key[64], cmd[160];
+    struct mbox *m = (struct mbox *)(unsigned long)MBOX_ADDR;
+    u8 *out = (u8 *)(unsigned long)APP_BASE, *src = (u8 *)(unsigned long)POST_DATA;
+    unsigned total = 0;
+    int n, i, hl, colon = 0, last = 0;
+    char sum[65];
+
+    if (!hub[0]) { pr("Primero pon la direccion del hub (U).\n"); return; }
+    pr("\nSUBIR AL HUB. Que quieres subir?\n"
+       "  NOMBRE              un programa guardado con SAVE (se sube como NOMBRE.BAS)\n"
+       "  HD0.1:RUTA/X.BIN    un archivo de la particion (.BIN o .BAS)\n> ");
+    n = readline(what, sizeof what, 0);
+    if (n <= 0)
+        return;
+    for (i = 0; what[i]; i++)
+        if (what[i] == ':') colon = 1;
+    if (colon) {
+        const char *b, *dot = 0;
+        int j;
+        n = K->read(what, (char *)src, (int)(POST_MAX - 4096u + 1), &total);
+        if (n < 0) { pr("PKG: no pude leer ese archivo.\n"); return; }
+        if (total > POST_MAX - 4096u) { pr("PKG: el archivo pasa de 2 MB.\n"); return; }
+        for (i = 0; what[i]; i++)
+            if (what[i] == ':' || what[i] == '/' || what[i] == '\\') last = i + 1;
+        b = what + last;
+        for (j = 0; b[j]; j++)
+            if (b[j] == '.') dot = b + j;
+        up_name(name, b, (dot && (dot[1] | 32) == 'b' && (dot[2] | 32) == 'a' && (dot[3] | 32) == 's') ? ".BAS" : ".BIN");
+    } else {
+        n = K->saved(what, (char *)src, (int)(POST_MAX - 4096u));
+        if (n < 0) { pr("PKG: no hay un programa guardado con ese nombre (mira DIR).\n"); return; }
+        up_name(name, what, ".BAS");
+    }
+    if (n == 0) { pr("PKG: esta vacio.\n"); return; }
+    if (!is_bas(name)) {
+        const struct hdr *h = (const struct hdr *)src;
+        if ((u32)n < sizeof *h || h->magic != 0x4D424350u || h->base != APP_BASE) {
+            pr("PKG: un .BIN de la tienda debe ser un modulo PCBM enlazado a 0x9000000 (mira apps/hello.c).\n");
+            return;
+        }
+    }
+    pr("Nombre en el hub ["); pr(name); pr("]: ");
+    i = readline(what, 13, 0);
+    if (i < 0) return;
+    if (i > 0) {
+        for (i = 0; what[i]; i++) if (what[i] >= 'a' && what[i] <= 'z') what[i] -= 32;
+        if (!name_ok(what)) { pr("PKG: el nombre debe ser 8.3 terminado en .BIN o .BAS\n"); return; }
+        for (i = 0; what[i]; i++) name[i] = what[i];
+        name[i] = 0;
+    }
+    pr("Descripcion (una linea, Enter = ninguna): ");
+    if (readline(desc, 56, 0) < 0) return;
+    if (hubkey[0]) {
+        for (i = 0; hubkey[i]; i++) key[i] = hubkey[i];
+        key[i] = 0;
+    } else {
+        pr("Clave del hub (HUB_KEY; ponla en la 2a linea de HUB.CFG para no escribirla): ");
+        if (readline(key, sizeof key, 1) <= 0) return;
+    }
+    /* cuerpo: "BOSUP 1\nNOMBRE\nCLAVE\nDESCRIPCION\n" + datos */
+    hl = 0;
+    {   const char *parts[4];
+        int j, q;
+        parts[0] = "BOSUP 1"; parts[1] = name; parts[2] = key; parts[3] = desc;
+        for (j = 0; j < 4; j++) {
+            for (q = 0; parts[j][q]; q++) out[hl++] = (u8)parts[j][q];
+            out[hl++] = '\n';
+        } }
+    for (i = 0; i < n; i++)
+        out[hl + i] = src[i];
+    sha256_hex(out + hl, (u32)n, sum);
+    pr("Subiendo "); pr(name); pr(" ("); prsize((unsigned)n); pr(") a "); pr(hub); pr(" ...\n");
+    m->magic = MBOX_MAGIC; m->app_len = 0; m->list_len = 0; m->spare = (u32)(hl + n);
+    if (!build_cmd(cmd, sizeof cmd, "dhcp;bospost ", hub, "/upload", 0, 0)) {
+        pr("PKG: la direccion del hub es demasiado larga\n");
+        return;
+    }
+    run_net(cmd);
+    if (m->magic != MBOX_MAGIC || m->list_len == 0) {
+        pr("\nPKG: la subida fallo (clave equivocada, hub dormido o sin red).\n");
+        return;
+    }
+    {   /* respuesta del hub: "OK NOMBRE bytes sha256" o un mensaje de error */
+        const char *r = (const char *)(unsigned long)LIST_ADDR;
+        char line[120];
+        u32 j;
+        int ok = 0;
+        for (j = 0; j < m->list_len && j < sizeof line - 1 && r[j] != '\n'; j++) line[j] = r[j];
+        line[j] = 0;
+        pr("Hub: "); pr(line); pr("\n");
+        if (line[0] == 'O' && line[1] == 'K') {
+            for (j = 0; line[j]; j++)
+                if (streq_n(line + j, sum, 64)) ok = 1;
+            pr(ok ? "Subido y comprobado (SHA-256 igual).\n" : "Subido, pero el hub reporta otra suma: revisa.\n");
+        }
+    }
+}
+
 static void ask_hub(void)
 {
     char buf[96];
@@ -765,13 +933,20 @@ int mod_main(const struct kapi *k)
         if (napps)
             show_list();
         else
-            pr("\nU = direccion del hub   R = reintentar   Q = salir\n");
+            pr("\nU = direccion del hub   S = subir un paquete   R = reintentar   Q = salir\n");
         pr("> ");
         n = readline(line, sizeof line, 0);
         if (n < 0 || line[0] == 'q' || line[0] == 'Q' || line[0] == 0)
             break;
         if (line[0] == 'u' || line[0] == 'U') {
             ask_hub();
+            loaded = hub[0] ? fetch_list() : 0;
+            if (!loaded) napps = 0;
+            merge_disk();
+            continue;
+        }
+        if (line[0] == 's' || line[0] == 'S') {
+            upload();
             loaded = hub[0] ? fetch_list() : 0;
             if (!loaded) napps = 0;
             merge_disk();
@@ -806,6 +981,8 @@ int mod_main(const struct kapi *k)
             run_app(v);
         else
             pr("Ese programa solo existe en el disco, o no hay conexion con el hub.\n");
+        if (bas_loaded)
+            break;
     }
     return 0;
 }

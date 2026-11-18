@@ -55,6 +55,25 @@ EDID se limita a 1024x768, que cualquier monitor acepta; si la BIOS rechaza un m
 En pantallas de 1600 px de ancho o más el texto se dibuja al doble (o triple desde 2880 px). Si no hay
 ningún modo VBE usable, cae a texto VGA de 80x25.
 
+## Versión de 32 bits (ARCH=32)
+
+El mismo código se compila también para **x86 de 32 bits** (modo protegido plano, sin paginación). Sirve para CPUs
+i686 y para emuladores de 32 bits como **v86**, que corre en el navegador.
+
+```
+make            # PC BASIC de 64 bits  -> pc-basic.img
+make 32         # PC BASIC de 32 bits  -> pc-basic32.img  (se arma en build32/, no pisa los .o de 64 bits)
+make run32      # la arranca en qemu-system-i386
+```
+
+Qué cambia en 32 bits: `entry32.asm` (GDT plana, sin PAE/LME), `thunk32.asm` (INT 13h desde modo protegido), `lib32.c`
+(división de 64 bits, sin libgcc), `map_mmio` sin paginación (`mmio.c`) y `u64` ahora es `unsigned long long` en ambas.
+El banner dice `(32-BIT)` o `(64-BIT)`.
+
+No van en la imagen de 32 bits (necesitan modo largo): `BASHTERM.APP`, `TINYCORE.APP` (arrancan Linux de 64 bits),
+`NET.APP` (iPXE de 64 bits) y `DOOM.APP` (motor de 64 bits). El resto (escritorio, PONG, CALC, FILES, YAAI, PLAY, SAY,
+PKG, INSTALL) se compila para 32 bits.
+
 ## Estructura
 
 | Archivo | Qué hace |
@@ -80,7 +99,7 @@ ningún modo VBE usable, cae a texto VGA de 80x25.
 | `kbd.c` | Teclado PS/2 (set 1, distribución español ISO: Shift+2 = `"`, AltGr+2 = `@`, ñ ç ¿ ¡, AltGr para `# | ~ [ ] { } \`; sin teclas muertas). Letras en MAYÚSCULAS; Shift o Bloq Mayús = minúsculas. Cursor parpadeante |
 | `lib.c` | `memset`, `memcpy`, `memmove`, `memcmp`, `strlen` |
 | `basic.c` | El intérprete de BASIC (sin dependencias de hardware) |
-| `sys/pkg.c` | PKG.APP: tienda de programas (lista, descarga por HTTPS, SHA-256, ejecuta) |
+| `sys/pkg.c` | PKG.APP: tienda de paquetes (lista, descarga por HTTPS, SHA-256, ejecuta `.BIN` o carga `.BAS`; **S** sube paquetes al hub) |
 | `sys/install.c` | INSTALL.APP: instala el sistema en otro disco o en el mismo USB (particion + FAT16 "BASIC-OS FS") |
 | `sys/doomapp.c` / `sys/doom.c` | DOOM: `DOOM.APP` (en /SYS) carga `DOOM.BIN` (motor PureDOOM + pantalla/teclado/raton) de la partición FAT; ver sección DOOM |
 | `test/` | Arnés que compila `basic.c` en el host y compara salidas |
@@ -185,7 +204,8 @@ comparación (`= <> < > <= >=`) y `CHR$ STR$ LEFT$ RIGHT$ MID$(a$,i[,n]) INKEY$`
 - Ventanas movibles, **redimensionables** (bordes/esquina), maximizar y cerrar; barra de tareas con botón por ventana y reloj.
 - **Terminal en ventana**: mini consola real (hasta 2), ejecuta BASIC (PRINT, PLOT, LINE…). El WM sigue vivo mientras corre el programa.
 - Apps (módulos `.APP` en /SYS): PONG, CALC, FILES. Atajos sin ventana enfocada: T/P/C/F/B.
-- **Fondos** (botón FONDO o tecla B): liso (la terminal de abajo nunca se ve), azul, plasma, estrellas, barras, fuego.
+- **Fondos** (botón FONDO o tecla B): liso (la terminal de abajo nunca se ve), azul, plasma, estrellas, barras, fuego y
+  **cubo** (el de por defecto): un cubo 3D con los colores de la terminal que gira y se inclina hacia donde está el ratón.
 - Requiere ~48 MB de RAM (pool de capas en 0x1000000).
 
 ### Framebuffers / capas
@@ -237,6 +257,9 @@ salen en mayuscula: para minusculas en la cadena usa Shift (o escribe en la cons
 - **hora** del RTC (puertos CMOS 0x70/0x71): sin fecha correcta TLS rechaza todo certificado;
 - **entropia** de respaldo (jitter del TSC en cada tic de 1024 Hz del RTC) para maquinas sin RDRAND, como el Turion II o QEMU `qemu64`;
 - comando `bosstash <imagen> app|list`: copia lo bajado a memoria fija para `PKG`.
+- comando `bospost <url>`: sube al hub (POST) lo que `PKG` dejó en memoria; necesita `tools/net/http-post.patch` (lo aplica `build.sh`).
+
+> Resumen de las ultimas novedades: [`docs/NOVEDADES.md`](docs/NOVEDADES.md)
 
 ## Instalar (INSTALL)
 
@@ -259,6 +282,12 @@ Probado en QEMU: disco vacio, y el mismo disco con subcarpetas y nombres largos 
 `PKG` (o `EXEC "PKG.APP"`) baja por Ethernet y HTTPS la lista de programas de un **hub** (`hub/server.py`, pensado para Render, que a su vez los toma de la
 carpeta `store/` de tu repo de GitHub), te deja elegir uno, comprueba su SHA-256 y lo ejecuta.
 Si arrancaste de un disco FAT16 que ve la BIOS (el que crea `INSTALL`), PKG guarda cada programa en `HDn.1:/APPS/` y la proxima vez lo ejecuta desde el disco sin red (`+N` lo baja otra vez, `-N` lo borra). El kernel sigue siendo de solo lectura: el escritor FAT16 vive dentro de `PKG.APP`.
+
+**Paquetes:** `NOMBRE.BIN` (módulo, se ejecuta) o `NOMBRE.BAS` (programa BASIC en texto: PKG lo carga y sale; escribe `RUN`).
+**Subir (tecla S en PKG):** escribe el nombre de un programa guardado con `SAVE` (se sube como `NOMBRE.BAS`) o la ruta de un
+archivo de la partición (`HD0.1:APPS/MIAPP.BIN`), el nombre en el hub y una descripción. Viaja por HTTPS como POST a
+`HUB/upload` (comando `bospost` de `NET.BIN`, máximo 2 MB). El hub pide la clave `HUB_KEY`: ponla como segunda línea de
+`HUB.CFG` (`make super HUB_URL=https://... HUB_KEY=...`) o PKG te la pregunta. Ojo: quien tenga una imagen con la clave puede subir.
 Los programas son modulos PCBM enlazados a **0x9000000**; `make store` compila `apps/*.c` a `store/*.BIN`. Necesita ~180 MB de RAM (QEMU: `-m 256 -nic user,model=e1000`).
 La direccion del hub va en `HUB.CFG` (`make pc-basic-doom.img HUB_URL=https://...`) o se escribe con la tecla `U`; no hay una por defecto a proposito.
 Guia completa de despliegue y seguridad: [`hub/README.md`](hub/README.md).
@@ -284,3 +313,51 @@ en el framebuffer VBE (color real de 16/24/32 bits, escalado a 4:3 centrado) y d
   pantalla completa reactiva el gancho del escritorio y lo repinta. `K->stream()` (`audio.c`): cola de audio estéreo s16 (11025 Hz por defecto; `stream(4,0,hz)` la cambia) que la aplicación empuja y el kernel remuestrea
   a 48 kHz y suma a las voces (latencia ~100-150 ms).
 
+
+## Video (PLAY, formato .BVC)
+Formato propio con gracia: **cada cuadro se dibuja del centro hacia afuera**, en circulos, y no por filas desde el borde. Los pixeles van guardados en ese orden
+(`dx^2+dy^2` creciente), con ordenes de "pixeles nuevos" / "pixeles sin cambio" entre cuadros. Si la maquina va justa, lo que queda sin actualizar es el borde y no
+el centro. El primer cuadro se revela despacio desde el centro. Audio: **PCM de 8 bits** sin signo, mono, intercalado cuadro por cuadro; sale por la tarjeta HDA/AC'97
+(`K->stream`) y marca el reloj del video; sin tarjeta el reloj es el del sistema.
+- Convertir (necesita `ffmpeg`): `make tools/mkbvc` y `tools/mkbvc entrada.mp4 salida.bvc [-w 240] [-h 180] [-f 20] [-r 11025] [-g] [-t 10]` (`-g` = gris de 8 bits, ideal para Bad Apple; maximo 640x480).
+- Imagen: `make pc-basic-video.img VIDEO=salida.bvc`. En BASIC: `PLAY "SALIDA.BVC"` (o `EXEC "PLAY.APP"` para `VIDEO.BVC`). **Espacio** = pausa, **ESC** = salir.
+- El archivo se carga entero a RAM (desde 0x8800000): en QEMU usa `-m 512` o mas. Formato completo en la cabecera de `sys/play.c`.
+- Probado en QEMU (con y sin Intel HDA); no probado en hardware real.
+- **Depurar en Linux sin reiniciar:** `make tools/bvcplay` (necesita SDL2: `sudo pacman -S sdl2`) y `tools/bvcplay video.bvc`. Espacio = pausa, flechas = cuadro a cuadro (izq/der) o ±5 s (arriba/abajo),
+  `b` = simula una maquina lenta (`--budget 3000`: solo se pintan 3000 pixeles por cuadro, del centro hacia afuera), `r` = repite la revelacion del primer cuadro.
+  `tools/bvcplay video.bvc --info [-v]` verifica el archivo y da estadisticas (bytes y % de pixeles nuevos por cuadro); `--dump N cuadro.ppm` guarda un cuadro.
+
+## Voz (SAY, TTS por formantes)
+
+`SAY "hola mundo"` habla el texto. Es un port de **FTTS** (el sintetizador de formantes estilo Klatt de Carlos, `ftts.c`) a un módulo de
+`/SYS` sin libc: reglas de pronunciación del español → fonemas X-SAMPA → duraciones, acento, entonación y transiciones → fuente glotal +
+cascada de resonadores F1..F5 + ruido paralelo → `K->stream()` (HDA o AC'97) a 22050 Hz. No necesita archivos de datos: los formantes
+que `ftts.c` lee de espeak-ng (es-419) van incrustados (tabla `OV[]` de `sys/say.c`). La salida es prácticamente la de `ftts`
+(correlación de envolvente 0.99 contra el binario de escritorio, mismo texto y voz).
+
+```
+SAY "hola mundo, esto es una prueba."       SAY A$              (cualquier expresión de cadena, máx. 127 caracteres)
+SAY "@TEXTO.TXT"                            lee un archivo (UTF-8 o CP437; se busca en USB0.1:, HD0.1:, ...), hasta 64 KB
+SAY                                         modo conversación: una frase por línea, línea vacía o ESC = salir
+SAY "-v f -r 1.3 buenos dias"               opciones antes del texto
+```
+
+| opción | efecto |
+|---|---|
+| `-v m\|f\|c\|o\|w\|r` | voz: hombre (por defecto), mujer, niño, ogro, susurro, robot |
+| `-r N` | velocidad (0.3 .. 4, por defecto 1) |
+| `-p HZ` | tono base |
+| `-l es\|ja\|xs` | idioma: español, japonés (romaji) o X-SAMPA directo |
+| `-x` | muestra los fonemas y cuánto tardó la síntesis |
+
+Los números se leen en voz alta (`25`, `1.250`, `3,5`, `-4`), y `% + = @ &` también. ESC corta la voz. Requiere tarjeta de audio (HDA / AC'97).
+
+Detalles técnicos:
+- El kernel se compila con `-mgeneral-regs-only` (sin SSE). `SAY.APP` se compila con SSE2 (`sys/say.o` tiene su propia regla en el Makefile) y
+  **activa SSE por su cuenta** (CR0.EM/TS = 0, CR4.OSFXSR y OSXMMEXCPT = 1, MXCSR con flush-to-zero) al arrancar y antes de cada frase, porque
+  una llamada a la BIOS (`thunk`) deja CR4 sin esos bits. Solo usa SSE2 (nada de SSSE3/SSE4: corre en un Turion II).
+- Sin libm: `sin/cos/exp` son polinomios; sin libc: cadenas y memoria propias.
+- Memoria: segmentos en 0xA000000, texto en 0xA200000, audio en 0xA900000 (necesita ≥ 192 MB de RAM). Se sintetiza por frases y se
+  reproduce por tandas de ~25 s para que empiece a hablar enseguida.
+- kapi: `K->stream(5, 0, g)` fija la ganancia del flujo (1..16; 6 por defecto, pensada para los efectos de Doom). SAY usa 1 y muestras a escala completa.
+- La consola entrega MAYÚSCULAS: las opciones no distinguen caso. En el texto da igual.

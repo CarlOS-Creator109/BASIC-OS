@@ -18,7 +18,7 @@
 #ifndef KAPI_H
 #define KAPI_H
 
-#define KAPI_VER 3
+#define KAPI_VER 4
 #define FONT_ADDR 0x6800            /* fuente 8x16: 16 bytes por caracter, 256 caracteres */
 
 /* tipos de SOUND (los usa tambien el kernel) */
@@ -126,11 +126,14 @@ struct kapi {
     int  (*rawin)(int op, int *a, int *b);
     /* flujo de audio en vivo: estereo s16 intercalado a 11025 Hz, mezclado con las voces por la tarjeta HDA/AC'97
      *   op 0 = iniciar (1 = bien, 0 = no hay tarjeta), op 1 = empujar n cuadros desde data (devuelve cuantos entraron),
-     *   op 2 = parar, op 3 = cuadros en cola sin sonar todavia */
+     *   op 2 = parar, op 3 = cuadros en cola sin sonar todavia, op 4 = tasa (n = Hz), op 5 = ganancia 1..16 (n; 6 por defecto) */
     int  (*stream)(int op, const void *data, unsigned n);
     /* discos por nombre ("HD0", "USB0"...):  op 0 = leer n sectores desde lba, 1 = escribir (solo discos de la BIOS),
      *   op 2 = tamano en sectores, op 3 = banderas (1 = unidad de arranque, 2 = se puede escribir). 0 = bien; -1 = no existe */
     int  (*blk)(const char *name, int op, unsigned long long lba, unsigned n, void *buf);
+    /* (ver 4) programa BASIC guardado con SAVE (el almacen del disco de arranque): copia su texto a buf.
+     *   Devuelve los bytes (<= max) o < 0 si no existe. Lo usa PKG para subir programas al hub. */
+    int  (*saved)(const char *name, char *buf, int max);
 };
 
 /* codigos de retorno de mod_main */

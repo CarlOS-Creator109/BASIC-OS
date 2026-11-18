@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BASIC-OS Hub: sirve a BASIC-OS los programas (.BIN) de una carpeta de un repo de GitHub.
+"""BASIC-OS Hub: sirve a BASIC-OS los paquetes (.BIN y .BAS) de una carpeta de un repo de GitHub, y los recibe.
 
 Solo usa la biblioteca estandar de Python (nada que instalar). Pensado para Render (render.yaml), pero corre en
 cualquier sitio:  python3 hub/server.py
@@ -13,19 +13,25 @@ Variables de entorno
   LOCAL_DIR     sirve una carpeta local en vez de GitHub (pruebas sin red)
   PORT          puerto (Render lo pone solo)                                   (8080)
   TLS_CERT / TLS_KEY   solo para pruebas locales con HTTPS (Render ya pone el HTTPS por fuera)
+  HUB_KEY       clave para SUBIR paquetes desde BASIC-OS (PKG, tecla S). Sin ella las subidas estan apagadas.
+                Donde se guarda lo subido:  LOCAL_DIR si existe; si no, el repo de GitHub (GITHUB_TOKEN con permiso
+                "Contents: write"); si no hay ninguno, solo en memoria (se pierde cuando Render reinicia el servicio).
 
 Rutas
   /list         texto plano, una linea por programa:  NOMBRE.BIN <bytes> <sha256> <descripcion>
   /get/NOMBRE.BIN   el programa (application/octet-stream, con Content-Length)
+  POST /upload  cuerpo "BOSUP 1\nNOMBRE\nCLAVE\nDESCRIPCION\n" + los bytes del paquete (lo manda PKG con bospost).
+                Responde "OK NOMBRE bytes sha256" o un error (403 clave, 400 paquete no valido, 413 muy grande).
   /             pagina de estado      /health   "ok"
 
-Un programa es  <GH_PATH>/NOMBRE.BIN  (nombre 8.3, el SO solo lee nombres cortos) y, opcionalmente,
+Un paquete es  <GH_PATH>/NOMBRE.BIN  o  NOMBRE.BAS  (nombre 8.3, el SO solo lee nombres cortos) y, opcionalmente,
 <GH_PATH>/NOMBRE.TXT cuya primera linea es la descripcion.
 """
-import hashlib, json, os, re, ssl, sys, threading, time, urllib.error, urllib.request
+import base64, hashlib, hmac, json, os, re, ssl, sys, threading, time, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-NAME_RE = re.compile(r"^[A-Za-z0-9_~-]{1,8}\.BIN$", re.I)
+NAME_RE = re.compile(r"^[A-Za-z0-9_~-]{1,8}\.(BIN|BAS)$", re.I)
+POST_MAX = 2 * 1024 * 1024             # lo que puede mandar BASIC-OS (bospost copia al heap de iPXE de 4 MB)
 MAX_BYTES = 16 * 1024 * 1024           # el SO reserva 32 MB para un programa de la tienda
 CFG = {
     "repo": os.environ.get("GH_REPO", ""),
@@ -34,10 +40,58 @@ CFG = {
     "token": os.environ.get("GITHUB_TOKEN", ""),
     "ttl": float(os.environ.get("CACHE_TTL", "120")),
     "local": os.environ.get("LOCAL_DIR", ""),
+    "key": os.environ.get("HUB_KEY", ""),
 }
+UPLOADS = {}                            # subidas que solo viven en memoria (sin LOCAL_DIR ni GITHUB_TOKEN)
 
 LOCK = threading.Lock()
 CACHE = {"at": 0.0, "apps": {}, "error": "", "source": ""}     # apps: NAME -> dict(size, sha256, desc, data, gitsha)
+
+
+def gh_put(name, data, message):
+    """Crea o reemplaza GH_PATH/name en el repo con la API de contenidos de GitHub."""
+    path = ("%s/%s" % (CFG["path"], name)) if CFG["path"] else name
+    api = "https://api.github.com/repos/%s/contents/%s" % (CFG["repo"], path)
+    hdr = {"User-Agent": "basicos-hub/1", "Accept": "application/vnd.github+json",
+           "Authorization": "Bearer " + CFG["token"]}
+    sha = None
+    try:
+        with urllib.request.urlopen(urllib.request.Request(api + "?ref=" + CFG["branch"], headers=hdr), timeout=30) as r:
+            sha = json.loads(r.read()).get("sha")
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+    body = {"message": message, "content": base64.b64encode(data).decode(), "branch": CFG["branch"]}
+    if sha:
+        body["sha"] = sha
+    req = urllib.request.Request(api, data=json.dumps(body).encode(), headers=hdr, method="PUT")
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.loads(r.read())["content"]["sha"]
+
+
+def store_upload(name, desc, data):
+    """Guarda un paquete subido. Devuelve donde quedo."""
+    sha = hashlib.sha256(data).hexdigest()
+    entry = dict(size=len(data), sha256=sha, desc=desc, data=data, gitsha="")
+    txtname = name[:-4] + ".TXT"
+    if CFG["local"]:
+        with open(os.path.join(CFG["local"], name), "wb") as f:
+            f.write(data)
+        if desc:
+            with open(os.path.join(CFG["local"], txtname), "w", encoding="utf-8") as f:
+                f.write(desc + "\n")
+        where = "carpeta " + CFG["local"]
+    elif CFG["repo"] and CFG["token"]:
+        entry["gitsha"] = gh_put(name, data, "BASIC-OS: sube %s" % name)
+        if desc:
+            gh_put(txtname, (desc + "\n").encode("utf-8"), "BASIC-OS: descripcion de %s" % name)
+        where = "github.com/%s" % CFG["repo"]
+    else:
+        UPLOADS[name] = entry
+        where = "memoria (se pierde al reiniciar: pon GITHUB_TOKEN o LOCAL_DIR)"
+    with LOCK:
+        CACHE["apps"][name] = entry
+    return sha, where
 
 
 def http_get(url, accept=None):
@@ -109,6 +163,7 @@ def refresh(force=False):
                 apps, src = scan_github(CACHE["apps"]), "github.com/%s/%s@%s" % (CFG["repo"], CFG["path"], CFG["branch"])
             else:
                 raise RuntimeError("falta GH_REPO (o LOCAL_DIR)")
+            apps.update(UPLOADS)
             CACHE.update(at=time.time(), apps=apps, error="", source=src)
         except Exception as e:                                     # noqa: BLE001
             CACHE["error"] = "%s: %s" % (type(e).__name__, e)
@@ -170,6 +225,48 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.route(False)
+
+    def do_POST(self):
+        if self.path.split("?", 1)[0] != "/upload":
+            return self.send(404, "no existe\n")
+        try:
+            n = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            n = -1
+        if n <= 0:
+            return self.send(411, "falta Content-Length\n")
+        if n > POST_MAX + 512:
+            return self.send(413, "ERROR el paquete pasa de 2 MB\n")
+        body = self.rfile.read(n)
+        if not CFG["key"]:
+            return self.send(403, "ERROR las subidas estan apagadas en este hub (falta HUB_KEY)\n")
+        parts = body.split(b"\n", 4)
+        if len(parts) != 5 or parts[0].strip() != b"BOSUP 1":
+            return self.send(400, "ERROR formato de subida desconocido\n")
+        name = parts[1].decode("ascii", "replace").strip().upper()
+        key = parts[2].strip()
+        desc = parts[3].decode("utf-8", "replace").strip()[:120]
+        data = parts[4]
+        if not hmac.compare_digest(key, CFG["key"].encode()):
+            print("subida rechazada (clave) de", self.address_string(), flush=True)
+            return self.send(403, "ERROR clave equivocada\n")
+        if not NAME_RE.match(name):
+            return self.send(400, "ERROR el nombre debe ser 8.3 terminado en .BIN o .BAS\n")
+        if not data:
+            return self.send(400, "ERROR paquete vacio\n")
+        if name.endswith(".BIN"):
+            magic, end, entry, base = (int.from_bytes(data[i:i + 4], "little") for i in (0, 4, 8, 12))
+            if len(data) < 16 or magic != 0x4D424350 or base != 0x9000000:
+                return self.send(400, "ERROR un .BIN debe ser un modulo PCBM enlazado a 0x9000000\n")
+        elif b"\0" in data:
+            return self.send(400, "ERROR un .BAS debe ser texto\n")
+        try:
+            sha, where = store_upload(name, desc, data)
+        except Exception as e:                                     # noqa: BLE001
+            print("subida fallo:", e, file=sys.stderr, flush=True)
+            return self.send(502, "ERROR no pude guardarlo: %s\n" % e)
+        print("subido %s (%d bytes) -> %s" % (name, len(data), where), flush=True)
+        return self.send(200, "OK %s %d %s\n" % (name, len(data), sha))
 
     def do_HEAD(self):
         self.route(True)

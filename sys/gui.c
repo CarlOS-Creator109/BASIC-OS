@@ -20,7 +20,7 @@
 #define TBAR   24                       /* barra de tareas */
 #define ICON_W 96
 #define ICON_H 84
-#define NBG    6
+#define NBG    7
 
 /* ---- estado ---- */
 static int SW, SH;
@@ -58,7 +58,7 @@ static int mode, mwin, gx, gy, gw0, gh0, rs_part;
 enum { M_NONE, M_MOVE, M_RESIZE, M_CAPTURE };
 enum { P_NONE, P_CLIENT, P_TITLE, P_CLOSE, P_MAX, P_RR, P_RB, P_RC };
 
-static int bgmode = 1;                  /* 0 = liso, 1 = azul... (siempre opacos) */
+static int bgmode = 6;                  /* 0 = liso, 1 = azul... 6 = cubo (siempre opacos) */
 static unsigned bg_t, bg_last;
 static int hover_icon = -1;
 static int quit;
@@ -68,7 +68,7 @@ static unsigned last_service;
 static int in_service;
 static int last_sec = -1;
 
-static const char *const bgname[NBG] = { "LISO", "AZUL", "PLASMA", "ESTRELLAS", "BARRAS", "FUEGO" };
+static const char *const bgname[NBG] = { "LISO", "AZUL", "PLASMA", "ESTRELLAS", "BARRAS", "FUEGO", "CUBO" };
 
 struct item { const char *label, *icon, *app; char key; };
 static const struct item items[] = {
@@ -249,6 +249,8 @@ static void bg_step(void)                /* avanza la animacion un cuadro */
     }
 }
 
+static void cube_draw(void);
+
 static void bg_draw(void)
 {
     int x, y, bx0 = cl_x0 & ~3, by0 = cl_y0 & ~3;
@@ -295,6 +297,9 @@ static void bg_draw(void)
             d_rect(cl_x0, y, cl_x1 - cl_x0, 1, c);
         }
         break;
+    case 6:
+        cube_draw();
+        break;
     default:
         for (y = by0; y < cl_y1; y += 4)
             for (x = bx0; x < cl_x1; x += 4) {
@@ -306,6 +311,157 @@ static void bg_draw(void)
             }
         break;
     }
+}
+
+/* ---- fondo CUBO: un cubo 3D con los colores de la terminal (caras azules, aristas blancas como las letras) que gira
+ *      sobre su eje vertical y se inclina hacia donde esta el raton. Todo con enteros. ---- */
+#define CB_S 1024                               /* medio lado del cubo */
+#define CB_D 3300                               /* distancia de la camara al centro */
+static int cb_yaw, cb_pitch, cb_spin;           /* angulos en 1/4096 de vuelta */
+#define CB_TILT 360                             /* inclinacion de base (~32 grados): siempre se ve la cara de arriba */
+static int cb_x[8], cb_y[8];                    /* vertices proyectados (coordenadas del escritorio) */
+static int cb_fc[6];                            /* color de cada cara visible, -1 = de espaldas */
+static int cb_x0, cb_y0, cb_x1, cb_y1;          /* rectangulo que ocupa el cubo en este cuadro */
+static int cb_ready;
+static const signed char cb_v[8][3] = {
+    { -1, -1, -1 }, { 1, -1, -1 }, { 1, 1, -1 }, { -1, 1, -1 },
+    { -1, -1, 1 }, { 1, -1, 1 }, { 1, 1, 1 }, { -1, 1, 1 } };
+static const u8 cb_face[6][4] = {               /* vistas desde fuera: sentido antihorario en el espacio */
+    { 4, 5, 6, 7 }, { 1, 0, 3, 2 }, { 5, 1, 2, 6 }, { 0, 4, 7, 3 }, { 7, 6, 2, 3 }, { 0, 1, 5, 4 } };
+static const signed char cb_n[6][3] = { { 0, 0, 1 }, { 0, 0, -1 }, { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 } };
+#define CB_DITHER 100                           /* "color" de cara oscura: azul y negro alternados */
+
+static int fsin(int a)                          /* seno de 4096 pasos por vuelta, -127..127 (interpola isin) */
+{
+    int i = a >> 4, f = a & 15, s0 = isin(i), s1 = isin(i + 1);
+    return s0 + (s1 - s0) * f / 16;
+}
+
+static void cb_rot(int x, int y, int z, int *ox, int *oy, int *oz)
+{
+    int ss = fsin(cb_spin), cs = fsin(cb_spin + 1024), sy = fsin(cb_yaw), cy = fsin(cb_yaw + 1024);
+    int sp = fsin(CB_TILT + cb_pitch), cp = fsin(CB_TILT + cb_pitch + 1024);
+    int x1 = (x * cs + z * ss) / 127, z1 = (z * cs - x * ss) / 127;        /* gira sobre su eje vertical */
+    int y2 = (y * cp - z1 * sp) / 127, z2 = (y * sp + z1 * cp) / 127;      /* se inclina arriba/abajo */
+    *ox = (x1 * cy + z2 * sy) / 127;                                       /* y voltea a izquierda/derecha */
+    *oy = y2;
+    *oz = (z2 * cy - x1 * sy) / 127;
+}
+
+static void cube_step(void)
+{
+    int i, ty, tp, cx = SW / 2, cy = (SH - TBAR) / 2, k = (SW < SH - TBAR ? SW : SH - TBAR) * 5 / 8;
+    ty = (mx - cx) * 640 / (SW / 2 ? SW / 2 : 1);                          /* hasta ~56 grados hacia el raton */
+    tp = (my - cy) * 480 / ((SH - TBAR) / 2 ? (SH - TBAR) / 2 : 1);      /* raton arriba = mira hacia arriba */
+    if (ty > 700) ty = 700;
+    if (ty < -700) ty = -700;
+    if (tp > 560) tp = 560;
+    if (tp < -560) tp = -560;
+    cb_yaw += (ty - cb_yaw) / 6;
+    cb_pitch += (tp - cb_pitch) / 6;
+    cb_spin = (cb_spin + 12) & 4095;
+    cb_x0 = SW; cb_y0 = SH; cb_x1 = cb_y1 = 0;
+    for (i = 0; i < 8; i++) {
+        int x, y, z, d;
+        cb_rot(cb_v[i][0] * CB_S, cb_v[i][1] * CB_S, cb_v[i][2] * CB_S, &x, &y, &z);
+        d = CB_D - z;
+        cb_x[i] = cx + x * k / d;
+        cb_y[i] = cy - y * k / d;
+        if (cb_x[i] < cb_x0) cb_x0 = cb_x[i];
+        if (cb_y[i] < cb_y0) cb_y0 = cb_y[i];
+        if (cb_x[i] > cb_x1) cb_x1 = cb_x[i];
+        if (cb_y[i] > cb_y1) cb_y1 = cb_y[i];
+    }
+    for (i = 0; i < 6; i++) {
+        const u8 *f = cb_face[i];
+        int ax = cb_x[f[1]] - cb_x[f[0]], ay = cb_y[f[1]] - cb_y[f[0]];
+        int bx = cb_x[f[2]] - cb_x[f[0]], by = cb_y[f[2]] - cb_y[f[0]];
+        int nx, ny, nz, light;
+        if (ax * by - ay * bx >= 0) {           /* de espaldas (la y de pantalla va hacia abajo) */
+            cb_fc[i] = -1;
+            continue;
+        }
+        cb_rot(cb_n[i][0] * 127, cb_n[i][1] * 127, cb_n[i][2] * 127, &nx, &ny, &nz);
+        light = (nz * 6 + ny * 4 - nx * 3) / 10;                            /* luz de enfrente, arriba a la izquierda */
+        cb_fc[i] = light > 70 ? C_LBLUE : (light > 25 ? C_BLUE : CB_DITHER);
+    }
+    cb_x0 -= 2; cb_y0 -= 2; cb_x1 += 3; cb_y1 += 3;
+    cb_ready = 1;
+}
+
+static void cb_span(int xa, int xb, int y, int c)
+{
+    int x;
+    if (y < cl_y0 || y >= cl_y1)
+        return;
+    if (xa < cl_x0) xa = cl_x0;
+    if (xb > cl_x1 - 1) xb = cl_x1 - 1;
+    for (x = xa; x <= xb; x++)
+        desk[y * SW + x] = (u8)(c == CB_DITHER ? (((x ^ y) & 1) ? C_BLUE : C_BLACK) : c);
+}
+
+static void cb_fill(const u8 *f, int c)         /* cuadrilatero convexo por lineas horizontales */
+{
+    int y, ya = SH, yb = -1, e;
+    for (e = 0; e < 4; e++) {
+        if (cb_y[f[e]] < ya) ya = cb_y[f[e]];
+        if (cb_y[f[e]] > yb) yb = cb_y[f[e]];
+    }
+    if (ya < cl_y0) ya = cl_y0;
+    if (yb > cl_y1 - 1) yb = cl_y1 - 1;
+    for (y = ya; y <= yb; y++) {
+        int xl = 1 << 30, xr = -(1 << 30);
+        for (e = 0; e < 4; e++) {
+            int x0 = cb_x[f[e]], y0 = cb_y[f[e]], x1 = cb_x[f[(e + 1) & 3]], y1 = cb_y[f[(e + 1) & 3]], x;
+            if (y0 == y1) {
+                if (y == y0) {
+                    if (x0 < xl) xl = x0;
+                    if (x1 < xl) xl = x1;
+                    if (x0 > xr) xr = x0;
+                    if (x1 > xr) xr = x1;
+                }
+                continue;
+            }
+            if ((y < y0 && y < y1) || (y > y0 && y > y1))
+                continue;
+            x = x0 + (x1 - x0) * (y - y0) / (y1 - y0);
+            if (x < xl) xl = x;
+            if (x > xr) xr = x;
+        }
+        if (xl <= xr)
+            cb_span(xl, xr, y, c);
+    }
+}
+
+static void cb_line(int x0, int y0, int x1, int y1, int c)
+{
+    int dx = x1 > x0 ? x1 - x0 : x0 - x1, dy = y1 > y0 ? y0 - y1 : y1 - y0;
+    int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = dx + dy;
+    for (;;) {
+        int e2 = 2 * err;
+        d_rect(x0, y0, 2, 2, c);
+        if (x0 == x1 && y0 == y1)
+            break;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+static void cube_draw(void)
+{
+    int i, e;
+    d_rect(cl_x0, cl_y0, cl_x1 - cl_x0, cl_y1 - cl_y0, C_BLACK);
+    if (!cb_ready)
+        cube_step();
+    if (cl_x1 <= cb_x0 || cl_x0 >= cb_x1 || cl_y1 <= cb_y0 || cl_y0 >= cb_y1)
+        return;
+    for (i = 0; i < 6; i++)
+        if (cb_fc[i] >= 0)
+            cb_fill(cb_face[i], cb_fc[i]);
+    for (i = 0; i < 6; i++)                     /* aristas blancas, como las letras de la terminal */
+        if (cb_fc[i] >= 0)
+            for (e = 0; e < 4; e++)
+                cb_line(cb_x[cb_face[i][e]], cb_y[cb_face[i][e]], cb_x[cb_face[i][(e + 1) & 3]], cb_y[cb_face[i][(e + 1) & 3]], C_WHITE);
 }
 
 /* ---- iconos y barra de tareas ---- */
@@ -1063,7 +1219,17 @@ static void service(void)
         if (wins[i].used && wins[i].closing && !wins[i].busy)
             win_close(i);
 
-    if (bgmode >= 2 && now - bg_last >= 38u) {       /* fondo animado: ~25 cuadros por segundo */
+    if (bgmode == 6 && now - bg_last >= 33u) {       /* cubo: ~30 cuadros/s, solo se repinta donde estaba y donde esta */
+        int ox0 = cb_x0, oy0 = cb_y0, ox1 = cb_x1, oy1 = cb_y1, had = cb_ready;
+        bg_last = now;
+        cube_step();
+        if (had) {
+            desk_dirty(ox0 < cb_x0 ? ox0 : cb_x0, oy0 < cb_y0 ? oy0 : cb_y0,
+                       (ox1 > cb_x1 ? ox1 : cb_x1) - (ox0 < cb_x0 ? ox0 : cb_x0),
+                       (oy1 > cb_y1 ? oy1 : cb_y1) - (oy0 < cb_y0 ? oy0 : cb_y0));
+        } else
+            desk_dirty(0, 0, SW, SH);
+    } else if (bgmode >= 2 && bgmode != 6 && now - bg_last >= 38u) {   /* fondo animado: ~25 cuadros por segundo */
         bg_last = now;
         bg_t += 3;
         bg_step();
