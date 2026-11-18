@@ -198,7 +198,23 @@ int plat_exec(const char *name)
     if (!is_gui(name))                          /* modulos de pantalla completa (YAAI...): sin escritorio */
     {
         int rr = mod_exec(name, 0);
-        return rr == MOD_WINAPP ? MODERR_BADHDR : rr;
+        if (rr != MOD_WINAPP)
+            return rr;
+        /* el modulo dejo una ventana publicada (p.ej. PKG con un programa de la tienda que abre ventana) */
+        if (!pub_app)
+            return MODERR_BADHDR;
+        if (vga_gui_active())
+            return 0;                           /* ya estamos en el escritorio: la terminal que lo corrio la recoge */
+        if (!vga_is_gfx() || vga_gui(1) < 0) {
+            pub_app = 0;
+            return MODERR_BADHDR;
+        }
+        rr = mod_exec("GUI.SYS", 0);            /* el escritorio la recoge al arrancar (wm_take) */
+        g_gui_tick = 0;
+        vga_con_select(0);
+        vga_gui(0);
+        pub_app = 0;
+        return rr == MOD_WINAPP ? 0 : rr;
     }
     if (!vga_is_gfx())
         return MODERR_BADHDR;                   /* el escritorio necesita el modo grafico */

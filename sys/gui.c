@@ -954,6 +954,11 @@ static void term_run(struct win *w, const char *line)
     w->busy = 0;
     if (w->closing)
         win_close((int)(w - wins));
+    {   /* lo que corrio en la terminal (PKG con un programa de ventana...) dejo una ventana publicada */
+        const struct wapp *a = K->wm_take();
+        if (a)
+            win_new(0, a, a->title ? a->title : "PROGRAMA");
+    }
 }
 
 static void term_key(struct win *w, int k)
@@ -1309,6 +1314,11 @@ int mod_main(const struct kapi *api)
     last_service = K->ms() - 100;
     service();
     K->set_tick(wm_hook);
+    {   /* un modulo abierto desde la consola que dejo una ventana publicada (programa de la tienda con ventana) */
+        const struct wapp *a = K->wm_take();
+        if (a)
+            win_new(0, a, a->title ? a->title : "PROGRAMA");
+    }
 
     while (!quit) {
         k = K->poll();

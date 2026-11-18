@@ -93,7 +93,7 @@ SYSPATHS := $(foreach f,$(SYSFILES),$(lastword $(subst =, ,$(f))))
 
 # los modulos de /SYS se compilan con -Os: el area /SYS de la imagen es fija (276 sectores) y con -O2 los
 # GCC nuevos (Arch) ya no cabian. La velocidad casi no cambia: el trabajo pesado lo hace el kernel.
-$(SYSDIR)/%.o: $(SYSDIR)/%.c kapi.h mod_head.h $(SYSDIR)/ui.h
+$(SYSDIR)/%.o: $(SYSDIR)/%.c kapi.h mod_head.h $(SYSDIR)/ui.h $(SYSDIR)/wtk.h $(SYSDIR)/binwin.h
 	$(CC) $(filter-out -O2,$(CFLAGS)) -Os -I. -c $< -o $@
 
 $(SYSDIR)/GUI.SYS: $(SYSDIR)/gui.o $(LIBO) mod.ld
@@ -175,9 +175,9 @@ tools/mkbashimg: tools/mkbashimg.c
 
 # ---- la tienda: programas para el hub (PKG.APP los baja por HTTPS). Un programa = apps/NOMBRE.c -> store/NOMBRE.BIN,
 #      enlazado a 0x9000000. Sube store/ a tu repo de GitHub; hub/server.py lo sirve (ver hub/README.md) ----
-STOREAPPS := hello
+STOREAPPS := hello demowin
 define STOREAPP
-store/$(shell echo $(1) | tr a-z A-Z).BIN: apps/$(1).c kapi.h mod_head.h $(LIBO) mod.ld
+store/$(shell echo $(1) | tr a-z A-Z).BIN: apps/$(1).c kapi.h mod_head.h sys/ui.h sys/wtk.h $(LIBO) mod.ld
 	$(CC) $(CFLAGS) -w -I. -c apps/$(1).c -o apps/$(1).o
 	$(MODLD) --defsym=MODBASE=0x9000000 apps/$(1).o $(LIBO) -o apps/$(1).elf
 	objcopy -O binary apps/$(1).elf $$@

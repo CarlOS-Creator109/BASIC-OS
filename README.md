@@ -100,6 +100,8 @@ PKG, INSTALL) se compila para 32 bits.
 | `lib.c` | `memset`, `memcpy`, `memmove`, `memcmp`, `strlen` |
 | `tools/cosmos/` + `sys/cosmosapp.c` | Navegador COSMOS: motor MM de Cosmos Browser (`html.c`, `layout.c`), libc mínima, pintado y red (`cosmosmm.c`) → `COSMOS.BIN` en la partición FAT; `COSMOS.APP` lo carga |
 | `basic.c` | El intérprete de BASIC (sin dependencias de hardware) |
+| `sys/wtk.h` | WTK: kit de ventanas (botones, cajas, listas, menús...) para apps y programas de la tienda |
+| `sys/binwin.h` | aviso compartido de "programa de la tienda con ventana abierta" |
 | `sys/foro.c` | FORO.APP: foro de texto (lista de hilos, leer, responder y abrir hilos por el hub) |
 | `sys/pkg.c` | PKG.APP: tienda de paquetes (lista, descarga por HTTPS, SHA-256, ejecuta `.BIN` o carga `.BAS`; **S** sube paquetes al hub) |
 | `sys/install.c` | INSTALL.APP: instala el sistema en otro disco o en el mismo USB (particion + FAT16 "BASIC-OS FS") |
@@ -335,6 +337,34 @@ Guia completa de despliegue y seguridad: [`hub/README.md`](hub/README.md).
 - Variables del hub: `FORO=0` lo apaga, `FORO_PATH` (carpeta, `foro`), `FORO_KEY` (si no, usa `HUB_KEY`), `FORO_OPEN=1`
   (escribir sin clave), `FORO_MIN_GAP` y `FORO_PER_HOUR`.
 
+## Ventanas para los programas (WTK)
+`sys/wtk.h` es el **kit de ventanas** de BASIC-OS: el programa declara sus controles y WTK los dibuja y atiende el teclado, el ratón
+y el cambio de tamaño. Es una cabecera, así que sirve igual para las apps de `/SYS` y para los programas de la tienda (`.BIN`).
+
+| Control | Función | Avisa (callback) |
+|---|---|---|
+| Etiqueta | `wt_label(x, y, texto)` | — |
+| Botón | `wt_button(x, y, w, h, texto, cb)` | al pulsarlo (clic, Enter o Espacio) |
+| Casilla | `wt_check(x, y, texto, &valor, cb)` | al marcarla o desmarcarla |
+| Caja de texto | `wt_input(x, y, w, buffer, tamaño, cb)` | con Enter (lo escrito siempre está en el buffer) |
+| Lista | `wt_list(x, y, w, h, renglones, n, &seleccion, cb)` | al cambiar la selección y con Enter o doble clic (`wt_ev`) |
+| Barra de progreso | `wt_progress(x, y, w, h, &valor, maximo)` | — |
+| Marco con título | `wt_box(x, y, w, h, titulo)` | — |
+| Lienzo | `wt_canvas(x, y, w, h, dibujar, clic)` | clic y arrastre con coordenadas del lienzo |
+| Menú | `wt_menu(titulo, opciones, n, cb)` | con el número de opción |
+
+- **Anclas** (`wt_anchor(id, ...)`): `WT_FILLW` / `WT_FILLH` estiran hasta el borde, `WT_RIGHT` / `WT_BOTTOM` pegan el control a la derecha o abajo.
+- **Más:** `wt_text`, `wt_color`, `wt_show`, `wt_enable`, `wt_items`, `wt_focus`, `wt_msg` (aviso con botón OK; el texto se parte solo),
+  `wt_title`, `wt_close`, `wt_on_tick` (~60 veces por segundo), `wt_on_key`, `wt_on_close`, `wt_on_resize`, `wt_background`.
+- **Teclado:** Tab cambia de control, flechas en listas y menús, Enter/Espacio pulsan. En las cajas, sin Shift = minúsculas.
+- **Abrir la ventana:** `mod_main` hace `K = k;` y `return wt_window("Titulo", ancho, alto, redimensionable, armar);`, donde `armar()` crea los controles.
+  El ejemplo completo es `apps/demowin.c` (`DEMOWIN.BIN` en la tienda): menú, caja de texto, lista de colores, lienzo para pintar con el ratón y barra animada.
+
+**Programas de la tienda con ventana.** Si un `.BIN` devuelve `MOD_WINAPP`, PKG le pasa su ventana al escritorio. Desde la consola,
+el escritorio se abre solo con esa ventana (lo mismo pasa con `EXEC "COSMOS.APP"` o cualquier app de ventana); desde una terminal del escritorio aparece al lado.
+Mientras esa ventana está abierta, su código ocupa la memoria de la tienda (0x9000000), así que PKG, FORO, COSMOS y PLAY esperan
+a que la cierres (`sys/binwin.h`). Solo puede haber un programa de la tienda con ventana a la vez.
+
 ## Navegador COSMOS (Minimal Motor de Cosmos Browser)
 Icono **COSMOS** en el escritorio (tecla **N**) o `EXEC "COSMOS.APP"` desde BASIC. Es una **ventana** del escritorio (se puede mover,
 maximizar y cambiar de tamaño: la página se vuelve a maquetar al ancho nuevo).
@@ -354,6 +384,8 @@ maximizar y cambiar de tamaño: la página se vuelve a maquetar al ancho nuevo).
 - **Teclas:** **Enter** ir · **Tab** entrar/salir de la barra · con la página activa, empezar a escribir abre una dirección nueva ·
   **↑ ↓** desplazar · **Espacio** página siguiente · **←** o **Retroceso** atrás · **→** adelante. Ratón: clic en enlaces (la barra de estado
   muestra a dónde van), clic/arrastre en la barra de desplazamiento.
+- **Videos:** un enlace a un `.BVC` no se abre como página: COSMOS lo baja (hasta 32 MB) y lo reproduce `PLAY` a pantalla completa;
+  al terminar vuelves a la misma página. El hub tiene su lista en `https://TU-HUB/videos` (también en la página de inicio de COSMOS).
 - **No hay (todavía):** JavaScript, imágenes, hojas de estilo externas (`<link rel=stylesheet>`), formularios y scroll horizontal.
   iPXE no entrega las páginas de error del servidor (404...), solo dice que falló.
 - **Imagen:** `COSMOS.BIN` (~110 KB, enlazado a 0x7000000; montón 0x7400000-0x8F00000) va en la partición FAT de `pc-basic-doom.img`,
@@ -389,6 +421,8 @@ el centro. El primer cuadro se revela despacio desde el centro. Audio: **PCM de 
 (`K->stream`) y marca el reloj del video; sin tarjeta el reloj es el del sistema.
 - Convertir (necesita `ffmpeg`): `make tools/mkbvc` y `tools/mkbvc entrada.mp4 salida.bvc [-w 240] [-h 180] [-f 20] [-r 11025] [-g] [-t 10]` (`-g` = gris de 8 bits, ideal para Bad Apple; maximo 640x480).
 - Imagen: `make pc-basic-video.img VIDEO=salida.bvc`. En BASIC: `PLAY "SALIDA.BVC"` (o `EXEC "PLAY.APP"` para `VIDEO.BVC`). **Espacio** = pausa, **ESC** = salir.
+- **Videos del hub:** el hub sirve los `.BVC` de la carpeta `videos/` del repo en `/videos`; en COSMOS un clic los reproduce (ver COSMOS).
+  Para publicar uno: `tools/mkbvc entrada.mp4 NOMBRE.BVC` (nombre 8.3, hasta 32 MB) y súbelo a `videos/` con git, con `NOMBRE.TXT` como descripción.
 - El archivo se carga entero a RAM (desde 0x8800000): en QEMU usa `-m 512` o mas. Formato completo en la cabecera de `sys/play.c`.
 - Probado en QEMU (con y sin Intel HDA); no probado en hardware real.
 - **Depurar en Linux sin reiniciar:** `make tools/bvcplay` (necesita SDL2: `sudo pacman -S sdl2`) y `tools/bvcplay video.bvc`. Espacio = pausa, flechas = cuadro a cuadro (izq/der) o ±5 s (arriba/abajo),

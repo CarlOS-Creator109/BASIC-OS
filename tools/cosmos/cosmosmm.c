@@ -14,6 +14,7 @@
 #include "cosmos.h"
 #include "kapi.h"
 #include "mod_head.h"
+#include "sys/binwin.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -664,6 +665,7 @@ static const char home_html[] =
     "<li><a href=\"https://text.npr.org/\" style=\"color:#70a4b2\">NPR solo texto (noticias)</a></li>"
     "<li><a href=\"http://68k.news/\" style=\"color:#70a4b2\">68k.news (noticias para equipos retro)</a></li>"
     "<li><a href=\"https://basic-os.onrender.com/list\" style=\"color:#70a4b2\">Lista del hub de BASIC-OS</a></li>"
+    "<li><a href=\"https://basic-os.onrender.com/videos\" style=\"color:#70a4b2\">Videos del hub de BASIC-OS (.BVC)</a></li>"
     "</ul>"
     "<h2 style=\"color:#9ad284\">Teclas</h2>"
     "<p><b>Enter</b> ir &middot; <b>Tab</b> salir de la barra &middot; empieza a escribir para una direcci\xc3\xb3n nueva<br>"
@@ -807,12 +809,63 @@ static void title_from_doc(void)
     Wc->title(Wc, t);
 }
 
+/* la URL apunta a un video .BVC (sin contar ?consulta ni #ancla) */
+static int is_bvc(const char *u)
+{
+    size_t n = strcspn(u, "?#");
+    return n > 4 && !strncasecmp(u + n - 4, ".bvc", 4);
+}
+
+/* los videos no se abren como pagina: se bajan a 0x9000000 y PLAY los reproduce a pantalla completa (modo MEM:) */
+static void play_video(const char *u)
+{
+    long n;
+    const unsigned char *v = (const unsigned char *)(unsigned long)STASH;
+    if (is_drive_path(u)) {
+        unsigned total = 0;
+        int r = kread(u, (char *)(unsigned long)STASH, (int)STASH_MAX, &total);
+        n = (r > 0 && (unsigned)r == total) ? r : -1;
+    } else {
+        scopy(status, "Bajando el video...", sizeof status);
+        redraw_status();
+        n = net_fetch(u);
+    }
+    if (n < 32 || v[0] != 'B' || v[1] != 'V' || v[2] != 'C' || v[3] != '1') {
+        scopy(status, n < 0 ? "Error: no se pudo bajar el video" : "Error: no es un video BVC1", sizeof status);
+        redraw_status();
+        return;
+    }
+    snprintf((char *)K->args, 160, "MEM:%ld", n);
+    snprintf(status, sizeof status, "Video: %ld KB (Espacio = pausa, ESC = salir)", n / 1024);
+    redraw_status();
+    Wc->launch("PLAY.APP");                     /* el escritorio lo corre a pantalla completa y luego repinta todo */
+    sse_on();
+    snprintf(status, sizeof status, "Video terminado (%ld KB)", n / 1024);
+    redraw_status();
+}
+
 static void do_load(void)
 {
     long n = -1;
     int failed = 0;
     const char *u = want;
     unsigned t0 = K->ms();
+    const char *bw = binwin_busy(0x40000000ull);
+    if (bw && strncmp(u, "cosmos:", 7)) {        /* un programa de la tienda con ventana ocupa 0x9000000 */
+        snprintf(status, sizeof status, "Cierra primero la ventana de %s (usa la misma memoria)", bw);
+        redraw_status();
+        return;
+    }
+    if (is_bvc(u)) {
+        busy = 1;
+        play_video(u);
+        busy = 0;
+        scopy(addr, strncmp(cur, "cosmos:", 7) ? cur : "", URLMAX);   /* la pagina sigue siendo la de antes */
+        addr_fresh = 1;
+        if (!closed)
+            redraw();
+        return;
+    }
     busy = 1;
     hover[0] = 0;
     if (!strncmp(u, "cosmos:", 7)) {

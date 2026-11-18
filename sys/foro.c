@@ -13,6 +13,7 @@
  */
 #include "kapi.h"
 #include "mod_head.h"
+#include "sys/binwin.h"
 
 typedef unsigned char u8;
 typedef unsigned short u16;
@@ -396,6 +397,11 @@ static int send_post(const char *hid, const char *title, const char *msg, int ml
     struct mbox *m = (struct mbox *)(unsigned long)MBOX_ADDR;
     u8 *out = (u8 *)(unsigned long)APP_BASE;
     int hl = 0, i;
+    {   const char *b = binwin_busy(ram_end());
+        if (b) {
+            pr("FORO: cierra primero la ventana de "); pr(b); pr(" (usa la memoria donde se arma el envio).\n");
+            return 0;
+        } }
     if (hubkey[0]) {
         for (i = 0; hubkey[i]; i++) key[i] = hubkey[i];
         key[i] = 0;

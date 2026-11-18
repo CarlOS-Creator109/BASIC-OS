@@ -21,6 +21,7 @@
  */
 #include "kapi.h"
 #include "mod_head.h"
+#include "sys/binwin.h"
 #include "tools/bas2bin/b2b.c"                 /* el compilador de .BAS a .BIN (mismo codigo que en Linux) */
 
 typedef unsigned char u8;
@@ -810,6 +811,32 @@ static int is_bas(const char *name)
 }
 
 static int bas_loaded;                          /* 1 = se cargo un .BAS: PKG sale para que el usuario escriba RUN */
+static int win_opened;                          /* 1 = el programa abrio una ventana: PKG sale y el escritorio la muestra */
+
+/* ventana de un programa de la tienda: la struct wapp se copia a memoria fija (binwin.h) y su stop() pasa por aqui para
+ * apagar el aviso cuando se cierre. Original en spare[0..127], la que ve el escritorio en spare[128..255]. */
+#define BW_ORIG ((struct wapp *)(unsigned long)(BINWIN_ADDR + 24))
+#define BW_PUB  ((struct wapp *)(unsigned long)(BINWIN_ADDR + 24 + 128))
+static void bw_stop(struct wctx *c)
+{
+    if (BW_ORIG->stop)
+        BW_ORIG->stop(c);
+    binwin_clear();
+}
+static void bw_open(const char *name, const struct wapp *a)
+{
+    int i;
+    memcpy(BW_ORIG, a, sizeof *a);
+    memcpy(BW_PUB, a, sizeof *a);
+    BW_PUB->stop = bw_stop;
+    for (i = 0; name[i] && i < 15; i++)
+        BINWIN->name[i] = name[i];
+    BINWIN->name[i] = 0;
+    BINWIN->magic = BINWIN_MAGIC;
+    BINWIN->check = ~BINWIN_MAGIC;
+    K->wm_publish(BW_PUB);
+    win_opened = 1;
+}
 
 static int launch(const char *name, u32 n)
 {
@@ -829,7 +856,14 @@ static int launch(const char *name, u32 n)
     memset((void *)(unsigned long)(APP_BASE + n), 0, h->end - (APP_BASE + n));
     pr("Ejecutando "); pr(name); pr(" ...\n\n");
     entry = (int (*)(const struct kapi *))(unsigned long)h->entry;
-    entry(K);
+    if (entry(K) == MOD_WINAPP) {
+        const struct wapp *a = K->wm_take();
+        if (a) {
+            bw_open(name, a);
+            pr("(PKG) "); pr(name); pr(" abre una ventana en el escritorio.\n");
+            return 1;
+        }
+    }
     pr("\n(PKG) el programa termino.\n");
     return 1;
 }
@@ -1111,6 +1145,12 @@ int mod_main(const struct kapi *k)
         pr("PKG necesita ~180 MB de RAM (la tienda usa memoria alta). En QEMU: -m 256\n");
         return 1;
     }
+    {   const char *b = binwin_busy(ram_end());
+        if (b) {
+            pr("\nPKG: "); pr(b); pr(" tiene una ventana abierta en el escritorio y usa la memoria de la tienda.\n"
+               "Cierrala primero (o sal del escritorio) y vuelve a abrir PKG.\n");
+            return 1;
+        } }
     load_cfg();
     if (!hub[0]) {
         pr("\nNo hay HUB.CFG en el disco: escribe la direccion de tu hub.\n");
@@ -1201,6 +1241,8 @@ int mod_main(const struct kapi *k)
             pr("Ese programa solo existe en el disco, o no hay conexion con el hub.\n");
         if (bas_loaded)
             break;
+        if (win_opened)
+            return MOD_WINAPP;
     }
     return 0;
 }

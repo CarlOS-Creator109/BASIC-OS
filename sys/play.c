@@ -20,9 +20,12 @@
  *
  * Uso:  PLAY "VIDEO.BVC"   (o  EXEC "PLAY.APP"  para VIDEO.BVC).  Espacio = pausa, ESC = salir.
  * Memoria: copia de pantalla 0x6000000, tablas 0x8000000, el archivo entero desde 0x8800000.
+ * Desde COSMOS (videos del hub): K->args = "MEM:bytes" y el video ya esta en 0x9000000 (lo dejo iPXE). En ese modo las tablas
+ * van a 0xB400000 para no pisar el monticulo de COSMOS (0x7400000-0x8F00000), que sigue abierto en su ventana.
  */
 #include "kapi.h"
 #include "mod_head.h"
+#include "sys/binwin.h"
 
 typedef unsigned char  u8;
 typedef unsigned short u16;
@@ -37,11 +40,14 @@ static const struct kapi *K;
 
 #define SAVE_BASE  0x6000000u
 #define SAVE_MAX   0x2000000u
-#define ORDER_ADDR 0x8000000u           /* u32 por pixel: (y << 16) | x */
-#define CUR_ADDR   0x8200000u           /* lo que deberia verse */
-#define SHOWN_ADDR 0x8300000u           /* lo que hay en pantalla */
-#define COUNT_ADDR 0x8400000u
+static unsigned long tbase = 0x8000000u;  /* tablas: 0x8000000 normal, 0xB400000 con MEM: */
+#define ORDER_ADDR (tbase)              /* u32 por pixel: (y << 16) | x */
+#define CUR_ADDR   (tbase + 0x200000u)  /* lo que deberia verse */
+#define SHOWN_ADDR (tbase + 0x300000u)  /* lo que hay en pantalla */
+#define COUNT_ADDR (tbase + 0x400000u)  /* hasta +0x680000 */
 #define VBUF       0x8800000u
+#define MEMBUF     0x9000000u           /* MEM: (COSMOS) */
+#define MEMTBL     0xB400000u
 #define RAM_TOP    0x3C000000u          /* el kernel mapea el primer GB */
 #define MAXW 640
 #define MAXH 480
@@ -224,6 +230,8 @@ static unsigned t_start, t_load;
 static int keys(void)
 {
     int k;
+    if (K->esc())                       /* ESC no llega como tecla: el teclado levanta una bandera */
+        return 1;
     while ((k = K->poll()) != 0) {
         if (k == 27)
             return 1;
@@ -282,6 +290,7 @@ static int load_file(const char *name, u32 *size)
 int mod_main(const struct kapi *api)
 {
     const u8 *base = (const u8 *)(unsigned long)VBUF;
+    int mem = 0;
     const char *name;
     u32 size = 0, off, f, gate, due_ms;
     int rc, ok = 1;
@@ -293,12 +302,35 @@ int mod_main(const struct kapi *api)
         return 1;
     }
     name = (K->args && K->args[0]) ? K->args : "VIDEO.BVC";
-    K->print("\nPLAY: CARGANDO ");
-    K->print(name);
-    K->print(" ...\n");
-    t_load = K->ms();
-    rc = load_file(name, &size);
-    t_load = K->ms() - t_load;
+    if (name[0] == 'M' && name[1] == 'E' && name[2] == 'M' && name[3] == ':') {
+        const char *q = name + 4;
+        while (*q >= '0' && *q <= '9')
+            size = size * 10 + (u32)(*q++ - '0');
+        ((char *)K->args)[0] = 0;       /* que un PLAY posterior no lo herede */
+        if (ram_end() < MEMTBL + 0x700000u) {
+            K->print("PLAY: NO HAY RAM SUFICIENTE (usa -m 256 o mas)\n");
+            return 1;
+        }
+        mem = 1;
+        base = (const u8 *)(unsigned long)MEMBUF;
+        tbase = MEMTBL;
+        rc = 0;
+        t_load = 0;
+    } else {
+        const char *b = binwin_busy(ram_end());
+        if (b) {
+            K->print("PLAY: CIERRA PRIMERO LA VENTANA DE ");
+            K->print(b);
+            K->print(" (USA LA MEMORIA DONDE SE CARGA EL VIDEO)\n");
+            return 1;
+        }
+        K->print("\nPLAY: CARGANDO ");
+        K->print(name);
+        K->print(" ...\n");
+        t_load = K->ms();
+        rc = load_file(name, &size);
+        t_load = K->ms() - t_load;
+    }
     if (rc == -1) {
         K->print("PLAY: NO ENCUENTRO EL ARCHIVO EN NINGUN DISCO (HD0.1: ...)\n");
         return 1;
@@ -307,7 +339,7 @@ int mod_main(const struct kapi *api)
         K->print("PLAY: NO HAY RAM SUFICIENTE PARA ESTE VIDEO (en QEMU usa -m 512 o mas)\n");
         return 1;
     }
-    {   /* cuanto tardo la lectura del disco: sirve para saber si el cuello es el USB */
+    if (!mem) {   /* cuanto tardo la lectura del disco: sirve para saber si el cuello es el USB */
         char msg[80];
         u32 kb = size / 1024, ms = t_load ? t_load : 1, i = 0, v;
         const char *a = "PLAY: LEIDOS ";

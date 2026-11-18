@@ -115,6 +115,18 @@ texto del mensaje
 - Variables opcionales: `FORO=0` (apagar), `FORO_PATH`, `FORO_KEY`, `FORO_OPEN=1`, `FORO_MIN_GAP` (15 s), `FORO_PER_HOUR` (20).
 - La clave de la comunidad sirve para escribir: quien la tenga puede publicar. El limite por IP frena el spam, no lo impide.
 
+## 8. Videos (/videos)
+
+El hub también sirve videos `.BVC` (el formato de `PLAY`) desde la carpeta `videos/` del repo. No hace falta configurar nada.
+
+- `/videos` es una página para COSMOS: un clic en un video lo baja y lo reproduce. `/videos/list` es la lista en texto y
+  `/videos/get/NOMBRE.BVC` el archivo.
+- Publicar: `tools/mkbvc entrada.mp4 NOMBRE.BVC` (nombre 8.3, máximo 32 MB), copia el archivo a `videos/` (y `NOMBRE.TXT` con
+  la descripción en la primera línea), luego `git add videos && git commit && git push`. Por la web de GitHub el límite es 25 MB.
+- Los videos no se suben desde BASIC-OS (PKG solo envía hasta 2 MB) y el hub no les calcula SHA-256 (sería bajar cada video entero
+  al arrancar). Cada descarga pasa por la RAM del hub: en Render gratis (512 MB) mejor videos de pocos MB.
+- Variables: `VIDEOS=0` lo apaga, `VIDEO_PATH` cambia la carpeta.
+
 ## Seguridad (leer)
 
 - **Lo que baja PKG se ejecuta con todos los privilegios del SO.** Usa solo tu propio repo. Con `HUB_KEY`, quien tenga

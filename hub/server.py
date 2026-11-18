@@ -30,6 +30,8 @@ Variables de entorno
                 En BASIC-OS basta poner la direccion  https://mi-hub.onrender.com/liberty  (tecla U de PKG).
   NOMBRE_KEY    clave de subida de esa tienda (LIBERTY_KEY, PLUGINS_KEY...); si falta se usa HUB_KEY
   OPEN_STORES   tiendas que aceptan subidas SIN clave ni revision, separadas por comas (liberty)
+  VIDEOS        "0" apaga los videos (/videos). Son archivos NOMBRE.BVC (+ NOMBRE.TXT) en la carpeta VIDEO_PATH del repo    (1)
+  VIDEO_PATH    carpeta del repo con los videos                                                                  (videos)
   FORO          "0" apaga el foro de texto (/foro/...). Cada hilo es un archivo <FORO_PATH>/NNNNNN.txt del repo.   (1)
   FORO_PATH     carpeta del repo con los hilos                                                                   (foro)
   FORO_KEY      clave para escribir en el foro; si falta se usa HUB_KEY. FORO_OPEN=1 deja escribir sin clave.
@@ -46,6 +48,10 @@ Rutas (con varias tiendas, delante va /NOMBRE: /liberty/list, /liberty/get/X, PO
   POST /foro/post  cuerpo "BOSFORO 1\nCLAVE\nAUTOR\nHILO\nTITULO\n" + el mensaje. HILO = el ID de un hilo o NEW (y entonces
                 lleva TITULO). Responde "OK ID" o un error (403 clave, 400 no valido, 409 hilo lleno, 429 muy seguido).
   Moderar: borra o edita el archivo del hilo en GitHub (el webhook o el CACHE_TTL lo recogen).
+  /videos       pagina HTML (para COSMOS: un clic en un video lo baja y lo reproduce PLAY)
+  /videos/list  "#VIDEOS 1 n" y una linea por video:  NOMBRE.BVC bytes descripcion
+  /videos/get/NOMBRE.BVC   el video. Los videos se suben al repo con git (VIDEO_PATH/NOMBRE.BVC, hasta 32 MB: lo que cabe en
+                la memoria de BASIC-OS) o por la web de GitHub (hasta 25 MB).
   /             pagina de estado de todas las tiendas      /health   "ok"
 
 Un paquete es  <GH_PATH>/NOMBRE.BIN  o  NOMBRE.BAS  (nombre 8.3, el SO solo lee nombres cortos) y, opcionalmente,
@@ -55,6 +61,8 @@ import base64, collections, hashlib, hmac, json, os, re, ssl, sys, threading, ti
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_~-]{1,8}\.(BIN|BAS)$", re.I)
+VIDEO_RE = re.compile(r"^[A-Za-z0-9_~-]{1,8}\.BVC$", re.I)
+VIDEO_MAX = 32 * 1024 * 1024           # BASIC-OS baja el video a 0x9000000 y tiene hasta 0xB000000
 POST_MAX = 2 * 1024 * 1024             # lo que puede mandar BASIC-OS (bospost copia al heap de iPXE de 4 MB)
 MAX_BYTES = 16 * 1024 * 1024           # el SO reserva 32 MB para un programa de la tienda
 CFG = {
@@ -78,8 +86,9 @@ STORE_RE = re.compile(r"^[a-z0-9_-]{1,16}$")
 class Store:
     """Una tienda = una carpeta del repo con su lista, su caché y sus reglas de subida."""
 
-    def __init__(self, name, path, key, is_open, default):
+    def __init__(self, name, path, key, is_open, default, name_re=NAME_RE, max_bytes=MAX_BYTES, hashed=True):
         self.name, self.path, self.key, self.open, self.default = name, path, key, is_open, default
+        self.name_re, self.max_bytes, self.hashed = name_re, max_bytes, hashed   # hashed=False: sin SHA-256 (videos grandes)
         self.scan = threading.Lock()                       # una sola relectura a la vez
         # apps: NOMBRE -> dict(size, sha256, desc, gitsha, path, data)   (data solo en uploads)
         self.cache = {"at": 0.0, "apps": {}, "error": "", "source": "", "etag": "", "scans": 0, "changed": 0.0}
@@ -93,7 +102,7 @@ class Store:
     @property
     def local_dir(self):
         d = CFG["local"]
-        return d if self.default else os.path.join(d, self.name)
+        return d if self.default else os.path.join(d, self.path)
 
 
 def make_stores():
@@ -103,6 +112,8 @@ def make_stores():
     for n in names:
         if not STORE_RE.match(n) or n in ("health", "refresh", "list", "get", "upload", "foro"):
             raise SystemExit("nombre de tienda no valido: %r (usa a-z 0-9 _ -)" % n)
+        if n in ("videos",):
+            raise SystemExit("la tienda no se puede llamar %r (es la ruta de los videos)" % n)
         if n in out:
             continue
         default = not out
@@ -113,6 +124,10 @@ def make_stores():
 
 STORES = make_stores()
 DEFAULT = next(iter(STORES.values()))
+VIDEOS = None
+if os.environ.get("VIDEOS", "1") != "0":
+    VIDEOS = Store("videos", os.environ.get("VIDEO_PATH", "videos").strip("/") or "videos", "", False, False,
+                   name_re=VIDEO_RE, max_bytes=VIDEO_MAX, hashed=False)
 
 
 def log(*a):
@@ -127,7 +142,7 @@ def gh_hdr(accept="application/vnd.github+json"):
     return h
 
 
-def gh_blob(gitsha):
+def gh_blob(gitsha, cache=True):
     """Los bytes de un archivo por su sha de git (API de blobs: siempre exacto, sin cache viejo de CDN)."""
     with LOCK:
         if gitsha in LRU:
@@ -135,9 +150,10 @@ def gh_blob(gitsha):
             return LRU[gitsha]
     url = "%s/repos/%s/git/blobs/%s" % (CFG["api"], CFG["repo"], gitsha)
     req = urllib.request.Request(url, headers=gh_hdr("application/vnd.github.raw+json"))
-    with urllib.request.urlopen(req, timeout=60) as r:
+    with urllib.request.urlopen(req, timeout=120) as r:
         data = r.read()
-    lru_put(gitsha, data)
+    if cache:
+        lru_put(gitsha, data)
     return data
 
 
@@ -190,11 +206,13 @@ def scan_github(st, old, etag):
     byu = {k.upper(): v for k, v in by.items()}
     apps = {}
     for fn, it in sorted(by.items()):
-        if not NAME_RE.match(fn) or it.get("size", 0) > MAX_BYTES:
+        if not st.name_re.match(fn) or it.get("size", 0) > st.max_bytes:
             continue
         key = fn.upper()
         prev = old.get(key)
-        if prev and prev["gitsha"] == it["sha"] and prev.get("data") is None:        # no cambio: no se vuelve a bajar
+        if not st.hashed:                                                         # videos: ni se bajan ni se suman
+            size, sha256 = it.get("size", 0), ""
+        elif prev and prev["gitsha"] == it["sha"] and prev.get("data") is None:  # no cambio: no se vuelve a bajar
             size, sha256 = prev["size"], prev["sha256"]
         else:
             data = gh_blob(it["sha"])                                             # cambio o es nuevo: se baja una vez para su SHA-256
@@ -220,15 +238,18 @@ def scan_local(st, old):
     if not os.path.isdir(d):
         return apps, ""
     for fn in sorted(os.listdir(d)):
-        if not NAME_RE.match(fn):
+        if not st.name_re.match(fn):
             continue
         p = os.path.join(d, fn)
         stt = os.stat(p)
-        if stt.st_size > MAX_BYTES:
+        if stt.st_size > st.max_bytes:
             continue
         stamp = "%d:%d" % (stt.st_size, stt.st_mtime_ns)
         prev = old.get(fn.upper())
-        sha256 = prev["sha256"] if prev and prev["gitsha"] == stamp else hashlib.sha256(open(p, "rb").read()).hexdigest()
+        if not st.hashed:
+            sha256 = ""
+        else:
+            sha256 = prev["sha256"] if prev and prev["gitsha"] == stamp else hashlib.sha256(open(p, "rb").read()).hexdigest()
         desc = ""
         tp = os.path.join(d, fn[:-4] + ".TXT")
         if not os.path.exists(tp):
@@ -306,8 +327,8 @@ def get_data(name, a):
         return a["data"]
     if a["path"]:
         return open(a["path"], "rb").read()
-    data = gh_blob(a["gitsha"])
-    if hashlib.sha256(data).hexdigest() != a["sha256"]:
+    data = gh_blob(a["gitsha"], cache=bool(a["sha256"]))
+    if a["sha256"] and hashlib.sha256(data).hexdigest() != a["sha256"]:
         raise RuntimeError("el SHA-256 de %s ya no coincide con la lista" % name)
     return data
 
@@ -665,6 +686,11 @@ class H(BaseHTTPRequestHandler):
                         "<p>Direccion en PKG (tecla U): <code>%s</code></p>")
                        % (esc(st.name), " (principal)" if st.default else "", esc(c["source"]), len(apps), ago, c["scans"],
                           "subidas SIN clave" if st.open else ("subidas con clave" if st.key else "subidas apagadas"), err, rows, addr))
+        if VIDEOS:
+            cv = catalog(VIDEOS)
+            out.append("<h2>videos</h2><p>%d videos &middot; fuente: %s &middot; <a href=\"/videos\">ver</a>%s</p>" % (
+                len(cv["apps"]), esc(cv["source"] or "(arrancando)"),
+                (" &middot; <b>Ultimo error:</b> " + esc(cv["error"])) if cv["error"] else ""))
         if FORO["on"]:
             out.append("<h2>foro</h2><p>%d hilos &middot; fuente: %s &middot; %s%s</p>" % (
                 len(FORUM.threads), esc(FORUM.source or "(arrancando)"),
@@ -682,6 +708,8 @@ class H(BaseHTTPRequestHandler):
             return self.status_page(head)
         if full == "/foro" or full.startswith("/foro/"):
             return self.foro_get(full, head)
+        if full == "/videos" or full.startswith("/videos/"):
+            return self.videos_get(full, head)
         st, path = self.pick(full)
         c = catalog(st)
         apps = c["apps"]
@@ -730,6 +758,57 @@ class H(BaseHTTPRequestHandler):
             if not t:
                 return self.send(404, "no existe\n", head=head)
             return self.send(200, ascii_fold(t["text"]), head=head)
+        return self.send(404, "no existe\n", head=head)
+
+    def videos_get(self, full, head):
+        st = VIDEOS
+        if st is None:
+            return self.send(404, "los videos estan apagados\n", head=head)
+        path = full[7:] or "/"
+        c = catalog(st)
+        vids = c["apps"]
+        if not st.ready.is_set():
+            return self.send(503, "ERROR el hub todavia no pudo leer GitHub (%s). Reintenta en unos segundos.\n" % (c["error"] or "arrancando"), head=head)
+        if path == "/list":
+            lines = ["#VIDEOS 1 %d" % len(vids)]
+            for n, a in sorted(vids.items()):
+                lines.append("%s %d %s" % (n, a["size"], a["desc"].replace("\n", " ")))
+            return self.send(200, "\n".join(lines) + "\n", head=head)
+        if path.startswith("/get/"):
+            name = path[5:].upper()
+            a = vids.get(name)
+            if not a:
+                return self.send(404, "no existe\n", head=head)
+            if head:
+                return self.send(200, b"", "application/octet-stream", head=True, length=a["size"])
+            try:
+                data = get_data(name, a)
+            except Exception as e:                                 # noqa: BLE001
+                log("video fallo:", e)
+                refresh_async(st, True)
+                return self.send(502, "ERROR no pude leerlo de GitHub: %s\n" % e)
+            return self.send(200, data, "application/octet-stream")
+        if path in ("/", "/index.html"):
+            rows = []
+            for n, a in sorted(vids.items()):
+                mb = a["size"] / (1024 * 1024)
+                rows.append("<li><a href=\"/videos/get/%s\" style=\"color:#b8c76f\"><b>%s</b></a> &middot; %s%s</li>" % (
+                    esc(n), esc(n[:-4]), ("%.1f MB" % mb) if mb >= 1 else ("%d KB" % max(1, a["size"] // 1024)),
+                    (" &middot; " + esc(a["desc"])) if a["desc"] else ""))
+            body = ("<!doctype html><html><head><meta charset=utf-8><title>Videos de BASIC-OS</title></head>"
+                    "<body style=\"background:#352879;color:#ffffff;margin:16px\">"
+                    "<h1 style=\"color:#b8c76f\">Videos de BASIC-OS</h1>"
+                    "<p>Videos en formato <b>.BVC</b> (el de PLAY: cada cuadro se dibuja del centro hacia afuera). "
+                    "En COSMOS, un clic en un video lo baja y lo reproduce a pantalla completa (<b>Espacio</b> pausa, <b>ESC</b> sale). "
+                    "En otro navegador el clic lo descarga.</p>"
+                    "<h2 style=\"color:#9ad284\">%d %s</h2><ul>%s</ul>"
+                    "<p style=\"color:#959595\">Subir un video: conviertelo con <code>tools/mkbvc entrada.mp4 SALIDA.BVC</code> "
+                    "(nombre 8.3, hasta 32 MB) y ponlo en la carpeta <code>%s/</code> del repo, con <code>SALIDA.TXT</code> "
+                    "(primera linea = descripcion) si quieres.</p>"
+                    "<p><a href=\"/\" style=\"color:#70a4b2\">Estado del hub</a></p></body></html>") % (
+                len(vids), "video" if len(vids) == 1 else "videos",
+                "".join(rows) or "<li>Todavia no hay videos.</li>", esc(st.path))
+            return self.send(200, body, "text/html; charset=utf-8", head=head)
         return self.send(404, "no existe\n", head=head)
 
     def foro_post(self):
@@ -822,6 +901,8 @@ class H(BaseHTTPRequestHandler):
             refresh_async(st, True)
         if FORO["on"]:
             threading.Thread(target=FORUM.refresh, args=(True,), daemon=True).start()
+        if VIDEOS:
+            refresh_async(VIDEOS, True)
         print("webhook: releyendo el repo", flush=True)
         return self.send(202, "releyendo\n")
 
@@ -843,6 +924,8 @@ def main():
     for st in STORES.values():
         threading.Thread(target=startup_scan, args=(st,), daemon=True).start()
     threading.Thread(target=foro_start, daemon=True).start()
+    if VIDEOS:
+        threading.Thread(target=startup_scan, args=(VIDEOS,), daemon=True).start()
     srv.serve_forever()
 
 
