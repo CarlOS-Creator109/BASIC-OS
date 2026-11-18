@@ -86,6 +86,35 @@ GitHub es la unica fuente de verdad; el hub no guarda programas en su disco (Ren
   puede leer pero no escribir. Sin `GITHUB_TOKEN` ni `LOCAL_DIR` las subidas quedan en memoria y se pierden al reiniciar.
 - Con `GITHUB_TOKEN` el limite de la API es de 5000 peticiones/hora; sin el, 60 (se nota si bajas varios programas distintos).
 
+## 6. Varias tiendas en un mismo hub (store, liberty, plugins...)
+`STORES=store,liberty,plugins` (ya viene en `render.yaml`) hace que un solo servicio sirva varias carpetas del repo.
+- La **primera** es la principal: vive en `GH_PATH` y responde en la raiz (`/list`, `/get/X`, `/upload`), asi que nada cambia para quien ya la usa.
+- Las demas viven en la carpeta con su nombre (`liberty/`, `plugins/`) y en `/NOMBRE/...`: `/liberty/list`, `/liberty/get/X`, `POST /liberty/upload`.
+  Si la carpeta no existe todavia es una tienda vacia: se crea sola con la primera subida.
+- **En BASIC-OS** basta cambiar la direccion del hub con la tecla `U` de PKG: `https://tu-hub.onrender.com/liberty`
+  (o ponerla en la 1a linea de `HUB.CFG`). Los programas bajados se guardan todos en `HDn.1:/APPS/`: ojo, dos tiendas con el mismo nombre de programa se pisan en el disco.
+- **Claves:** cada tienda usa `NOMBRE_KEY` (`PLUGINS_KEY`...) y si no existe, `HUB_KEY`.
+- **`OPEN_STORES=liberty`**: esa tienda acepta subidas **sin clave y sin revision**; cualquiera puede subir y reemplazar un programa que ya existe
+  (en GitHub queda el historial para revertir). Es a proposito (tienda "anarquica"), pero lo que baja PKG se ejecuta con control total del sistema:
+  trata esa tienda como no confiable.
+- El webhook de GitHub (`/refresh`) relee todas las tiendas.
+
+## 7. Foro de texto (/foro)
+
+El mismo hub sirve un foro para `FORO.APP`. No hay que configurar nada nuevo: usa `GH_REPO`, `GITHUB_TOKEN` y `HUB_KEY`.
+Cada hilo es `foro/NNNNNN.txt` en el repo (la carpeta se crea con el primer hilo); cada mensaje es un commit.
+
+```
+# Titulo del hilo
+== autor | 2026-11-18 16:40 UTC
+texto del mensaje
+```
+
+- `GET /foro/list`, `GET /foro/hilo/NNNNNN`, `POST /foro/post` (formato en la cabecera de `server.py`).
+- Moderar = editar o borrar el archivo en GitHub. Con el webhook puesto el hub lo ve al momento; si no, en `CACHE_TTL`.
+- Variables opcionales: `FORO=0` (apagar), `FORO_PATH`, `FORO_KEY`, `FORO_OPEN=1`, `FORO_MIN_GAP` (15 s), `FORO_PER_HOUR` (20).
+- La clave de la comunidad sirve para escribir: quien la tenga puede publicar. El limite por IP frena el spam, no lo impide.
+
 ## Seguridad (leer)
 
 - **Lo que baja PKG se ejecuta con todos los privilegios del SO.** Usa solo tu propio repo. Con `HUB_KEY`, quien tenga

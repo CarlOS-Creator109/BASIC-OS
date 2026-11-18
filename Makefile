@@ -81,7 +81,7 @@ kernel.bin: kernel.elf
 MODLD := ld -m $(LDEMU) -T mod.ld -nostdlib -z noexecstack --no-warn-rwx-segments
 SYSDIR := sys
 SYSFILES := GUI.SYS=$(SYSDIR)/GUI.SYS PONG.APP=$(SYSDIR)/PONG.APP CALC.APP=$(SYSDIR)/CALC.APP \
-            FILES.APP=$(SYSDIR)/FILES.APP YAAI.APP=$(SYSDIR)/YAAI.APP BASHTERM.APP=$(SYSDIR)/BASHTERM.APP TINYCORE.APP=$(SYSDIR)/TINYCORE.APP NET.APP=$(SYSDIR)/NET.APP DOOM.APP=$(SYSDIR)/DOOM.APP PKG.APP=$(SYSDIR)/PKG.APP INSTALL.APP=$(SYSDIR)/INSTALL.APP PLAY.APP=$(SYSDIR)/PLAY.APP SAY.APP=$(SYSDIR)/SAY.APP COSMOS.APP=$(SYSDIR)/COSMOS.APP PONG.BAS=$(SYSDIR)/pong.bas \
+            FILES.APP=$(SYSDIR)/FILES.APP YAAI.APP=$(SYSDIR)/YAAI.APP BASHTERM.APP=$(SYSDIR)/BASHTERM.APP TINYCORE.APP=$(SYSDIR)/TINYCORE.APP NET.APP=$(SYSDIR)/NET.APP DOOM.APP=$(SYSDIR)/DOOM.APP PKG.APP=$(SYSDIR)/PKG.APP FORO.APP=$(SYSDIR)/FORO.APP INSTALL.APP=$(SYSDIR)/INSTALL.APP PLAY.APP=$(SYSDIR)/PLAY.APP SAY.APP=$(SYSDIR)/SAY.APP COSMOS.APP=$(SYSDIR)/COSMOS.APP PONG.BAS=$(SYSDIR)/pong.bas \
             $(foreach i,$(wildcard icons/*.icb),$(shell echo $(notdir $(i)) | tr a-z A-Z)=$(i))
 
 # ARCH=32: estas apps dependen del modo largo (arrancan Linux de 64 bits, iPXE de 64 bits o el motor DOOM de 64 bits)
@@ -115,6 +115,7 @@ $(eval $(call APP,TINYCORE,tinycore,0x680000))
 $(eval $(call APP,NET,net,0x6F0000))
 $(eval $(call APP,DOOM,doomapp,0x6A0000))
 $(eval $(call APP,PKG,pkg,0x6B0000))
+$(eval $(call APP,FORO,foro,0x4C0000))
 $(eval $(call APP,INSTALL,install,0x6C0000))
 $(eval $(call APP,PLAY,play,0x6D0000))
 $(eval $(call APP,SAY,say,0x6E0000))

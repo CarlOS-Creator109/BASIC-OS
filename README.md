@@ -100,6 +100,7 @@ PKG, INSTALL) se compila para 32 bits.
 | `lib.c` | `memset`, `memcpy`, `memmove`, `memcmp`, `strlen` |
 | `tools/cosmos/` + `sys/cosmosapp.c` | Navegador COSMOS: motor MM de Cosmos Browser (`html.c`, `layout.c`), libc mínima, pintado y red (`cosmosmm.c`) → `COSMOS.BIN` en la partición FAT; `COSMOS.APP` lo carga |
 | `basic.c` | El intérprete de BASIC (sin dependencias de hardware) |
+| `sys/foro.c` | FORO.APP: foro de texto (lista de hilos, leer, responder y abrir hilos por el hub) |
 | `sys/pkg.c` | PKG.APP: tienda de paquetes (lista, descarga por HTTPS, SHA-256, ejecuta `.BIN` o carga `.BAS`; **S** sube paquetes al hub) |
 | `sys/install.c` | INSTALL.APP: instala el sistema en otro disco o en el mismo USB (particion + FAT16 "BASIC-OS FS") |
 | `sys/doomapp.c` / `sys/doom.c` | DOOM: `DOOM.APP` (en /SYS) carga `DOOM.BIN` (motor PureDOOM + pantalla/teclado/raton) de la partición FAT; ver sección DOOM |
@@ -320,6 +321,20 @@ Los programas son modulos PCBM enlazados a **0x9000000**; `make store` compila `
 La direccion del hub va en `HUB.CFG` (`make pc-basic-doom.img HUB_URL=https://...`) o se escribe con la tecla `U`; no hay una por defecto a proposito.
 Guia completa de despliegue y seguridad: [`hub/README.md`](hub/README.md).
 
+## Foro de texto (FORO + hub + GitHub)
+`FORO` (o `EXEC "FORO.APP"`) es un foro de texto que usa el mismo hub que PKG. El hub guarda cada hilo como un archivo
+`foro/NNNNNN.txt` del repo de GitHub (un commit por mensaje), así que no necesita base de datos y todo queda a la vista en GitHub.
+
+- **Leer:** la lista muestra los hilos con más actividad primero (12 por página, flechas o `+` / `-` para cambiar de página).
+  Escribe el número para leer un hilo; se pausa cada pantalla (Enter sigue, Q sale).
+- **Escribir:** `N` = hilo nuevo (título y mensaje), y dentro de un hilo `R` = responder. El mensaje puede tener varias líneas
+  y se termina con una línea vacía. Tu nombre se pide una vez por sesión. Se usa la clave de `HUB.CFG` (2a línea), la misma de PKG.
+- **Límites del hub:** 1500 letras por mensaje, 60 mensajes por hilo, 500 hilos, un mensaje cada 15 s y 20 por hora por conexión.
+  Como la consola solo pinta ASCII, el hub quita los acentos al mandarlo al sistema (en GitHub se guarda el texto original).
+- **Moderar:** borra o edita el archivo del hilo en GitHub; con el webhook el hub lo nota al instante.
+- Variables del hub: `FORO=0` lo apaga, `FORO_PATH` (carpeta, `foro`), `FORO_KEY` (si no, usa `HUB_KEY`), `FORO_OPEN=1`
+  (escribir sin clave), `FORO_MIN_GAP` y `FORO_PER_HOUR`.
+
 ## Navegador COSMOS (Minimal Motor de Cosmos Browser)
 Icono **COSMOS** en el escritorio (tecla **N**) o `EXEC "COSMOS.APP"` desde BASIC. Es una **ventana** del escritorio (se puede mover,
 maximizar y cambiar de tamaño: la página se vuelve a maquetar al ancho nuevo).
@@ -414,3 +429,8 @@ Detalles técnicos:
   reproduce por tandas de ~25 s para que empiece a hablar enseguida.
 - kapi: `K->stream(5, 0, g)` fija la ganancia del flujo (1..16; 6 por defecto, pensada para los efectos de Doom). SAY usa 1 y muestras a escala completa.
 - La consola entrega MAYÚSCULAS: las opciones no distinguen caso. En el texto da igual.
+
+## Licencia
+
+Codigo propio: **GPL-2.0-or-later** (ver `LICENSE`). Los componentes de terceros (iPXE, espeak-ng, PureDOOM, doom1.wad, Linux/Tiny Core)
+conservan su licencia: detalle en `LICENSES.md`.

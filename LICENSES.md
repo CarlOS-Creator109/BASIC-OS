@@ -1,6 +1,25 @@
-# Licencias de terceros
+# Licencias
 
-El codigo propio de BASIC-OS (kernel, `sys/`, `apps/`, `hub/`, herramientas) lo publica su autor; **elige y agrega aqui la licencia que quieras** (por ejemplo MIT).
+## Codigo propio de BASIC-OS
+
+El codigo propio (kernel, `sys/`, `apps/`, `hub/`, herramientas) es software libre bajo la **GNU GPL version 2 o posterior (GPL-2.0-or-later)**.
+El texto completo esta en `LICENSE`. Puedes usarlo, estudiarlo, modificarlo y redistribuirlo bajo esas condiciones.
+
+```
+BASIC-OS - sistema operativo con intérprete de BASIC
+Copyright (C) COS-Mods (Carlos)
+
+This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public
+License as published by the Free Software Foundation; either version 2 of the License, or (at your option) any later version.
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+```
+
+"o posterior" es a proposito: asi tu codigo se puede combinar con codigo GPL-3.0 (como los formantes de espeak-ng de `SAY.APP`).
+Los programas que la gente sube al hub (`store/`, `liberty/`) son de sus autores y llevan la licencia que ellos pongan.
+
+## Componentes de terceros
+
 Este repo incluye o usa:
 
 | Componente | Donde | Licencia |
