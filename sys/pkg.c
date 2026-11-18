@@ -9,6 +9,9 @@
  * No hay direccion por defecto a proposito: PKG ejecuta lo que baja, asi que solo habla con el hub que tu pongas.
  * Uso:  PKG   (o EXEC "PKG.APP")     Teclas: numero + Enter = ejecutar (del disco si ya esta), +numero = bajar otra vez,
  *       -numero = borrar del disco, S = subir un paquete al hub, R = recargar, U = direccion del hub, Q/ESC = salir.
+ *       Con muchos paquetes: F texto = buscar en nombre y descripcion (F solo = quitar el filtro), T = ver las etiquetas,
+ *       T etiqueta = solo esa, flechas o N / A = pagina siguiente / anterior (12 por pagina). La etiqueta es el [texto] con el que empieza la
+ *       descripcion. Los numeros no cambian al filtrar: son los de la lista completa.
  * Paquetes: NOMBRE.BIN (modulo PCBM, se ejecuta) o NOMBRE.BAS (programa BASIC en texto: se carga y se escribe RUN).
  * Subir (S): un programa guardado con SAVE (se sube como NOMBRE.BAS) o un archivo de la particion (HD0.1:RUTA/X.BIN).
  *   Viaja por HTTPS como POST a HUB/upload con NET.BIN (comando bospost). El hub pide una clave: la segunda linea de
@@ -535,12 +538,17 @@ static int build_cmd(char *dst, int max, const char *a, const char *b, const cha
 }
 
 /* ---- lista de programas (texto del hub: "#HUB 1 n" y lineas "NOMBRE.BIN bytes sha256 descripcion") ---- */
-#define MAXAPPS 60
-static struct { char name[16]; u32 size; char sha[65]; char desc[56]; int hub, inst; } apps[MAXAPPS];
+#define MAXAPPS 400
+struct app { char name[16]; u32 size; char sha[65]; char desc[56]; u8 hub, inst; };
+struct dfile { char name[16]; u32 size; };
+#define APPS_ADDR  0xB260000u           /* tabla de programas: 400 x 144 B. Fuera del modulo (solo hay 64 KB entre PKG.APP e INSTALL.APP) */
+#define DISK_ADDR  0xB270000u           /* archivos que ya estan en el disco: 400 x 20 B */
+#define apps ((struct app *)(unsigned long)APPS_ADDR)
 static int napps;
+static int truncated;                   /* el hub tiene mas de MAXAPPS programas */
 
 /* ---- lo que ya esta guardado en el disco ---- */
-static struct { char name[16]; u32 size; } disk[MAXAPPS];
+#define disk ((struct dfile *)(unsigned long)DISK_ADDR)
 static int ndisk;
 static void disk_cb(const char *name, unsigned size, int isdir)
 {
@@ -584,7 +592,9 @@ static void parse_list(void)
     const struct mbox *m = (const struct mbox *)(unsigned long)MBOX_ADDR;
     const char *end = p + m->list_len;
     napps = 0;
-    while (p < end && napps < MAXAPPS) {
+    truncated = 0;
+    while (p < end) {
+        if (napps >= MAXAPPS) { truncated = 1; break; }
         const char *e = p;
         int i, k;
         u32 v = 0;
@@ -637,26 +647,146 @@ static int fetch_list(void)
     return 1;
 }
 
-static void show_list(void)
+/* ---- buscar: filtro por texto (F), por etiqueta (T) y paginas (N/A) ----
+ * La etiqueta es lo que va entre corchetes al principio de la descripcion: "[juego] Pong de dos jugadores". */
+#define PER_PAGE 12
+static char filt[24];                           /* filtro actual en minusculas ("" = sin filtro) */
+static int filt_tag;                            /* 1 = filt es una etiqueta exacta, 0 = texto dentro del nombre o la descripcion */
+static int page;
+static int view[MAXAPPS], nview;
+
+static char lc(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
+
+static int has_ci(const char *hay, const char *needle)
 {
-    int i;
-    pr("\n=== BASIC-OS: "); prnum((unsigned)napps); pr(" programas ===\n");
-    for (i = 0; i < napps; i++) {
-        prnum((unsigned)i + 1); pr(") ");
-        pr(apps[i].name); pr(apps[i].inst ? " [en disco]  " : "  "); prsize(apps[i].size);
-        if (apps[i].desc[0]) { pr("  - "); pr(apps[i].desc); }
-        pr("\n");
+    int i, j;
+    if (!needle[0])
+        return 1;
+    for (i = 0; hay[i]; i++) {
+        for (j = 0; needle[j] && hay[i + j] && lc(hay[i + j]) == needle[j]; j++)
+            ;
+        if (!needle[j])
+            return 1;
     }
-    pr("\nNumero = ejecutar (del disco si ya esta, si no se baja y se guarda)   +N = bajar otra vez   -N = borrar del disco\nS = subir un paquete   C = compilar un .BAS a .BIN   R = recargar   U = hub   Q = salir\n");
+    return 0;
 }
 
-/* leer una linea corta con eco; devuelve la longitud, -1 si ESC */
+/* etiqueta de una descripcion en minusculas; devuelve 1 si tiene */
+static int get_tag(const char *desc, char *out, int max)
+{
+    int k = 0;
+    while (*desc == ' ')
+        desc++;
+    if (*desc != '[')
+        return 0;
+    desc++;
+    while (*desc && *desc != ']' && k < max - 1)
+        out[k++] = lc(*desc++);
+    out[k] = 0;
+    return *desc == ']' && k > 0;
+}
+
+static void build_view(void)
+{
+    int i, pages;
+    char tag[20];
+    nview = 0;
+    for (i = 0; i < napps; i++) {
+        int ok;
+        if (!filt[0]) ok = 1;
+        else if (filt_tag) ok = get_tag(apps[i].desc, tag, sizeof tag) && streq(tag, filt);
+        else ok = has_ci(apps[i].name, filt) || has_ci(apps[i].desc, filt);
+        if (ok)
+            view[nview++] = i;
+    }
+    pages = (nview + PER_PAGE - 1) / PER_PAGE;
+    if (page >= pages) page = pages - 1;
+    if (page < 0) page = 0;
+}
+
+static void set_filter(const char *arg, int tag)
+{
+    int k = 0;
+    while (*arg == ' ')
+        arg++;
+    while (arg[k] && k < (int)sizeof filt - 1) { filt[k] = lc(arg[k]); k++; }
+    while (k > 0 && filt[k - 1] == ' ') k--;
+    filt[k] = 0;
+    filt_tag = tag && k > 0;
+    page = 0;
+}
+
+static void show_tags(void)
+{
+    static char tg[32][20];
+    static int cnt[32];
+    int i, j, nt = 0, none = 0;
+    char t[20];
+    for (i = 0; i < napps; i++) {
+        if (!get_tag(apps[i].desc, t, sizeof t)) { none++; continue; }
+        for (j = 0; j < nt && !streq(tg[j], t); j++)
+            ;
+        if (j == nt) {
+            if (nt >= 32) continue;
+            { int k; for (k = 0; t[k]; k++) tg[nt][k] = t[k]; tg[nt][k] = 0; }
+            cnt[nt++] = 0;
+        }
+        cnt[j]++;
+    }
+    if (!nt) {
+        pr("\nNingun programa tiene etiqueta todavia. Al subir, empieza la descripcion con [etiqueta], por ejemplo: [juego] Mi juego.\n");
+        return;
+    }
+    pr("\nEtiquetas:\n");
+    for (j = 0; j < nt; j++) {
+        pr("  "); pr(tg[j]); pr(" ("); prnum((unsigned)cnt[j]); pr(")");
+        if (j % 4 == 3) pr("\n");
+    }
+    if (nt % 4) pr("\n");
+    if (none) { pr("  sin etiqueta: "); prnum((unsigned)none); pr("\n"); }
+    pr("T etiqueta = ver solo esa   (por ejemplo: T "); pr(tg[0]); pr(")\n");
+}
+
+static void show_list(void)
+{
+    int i, pages;
+    build_view();
+    pages = (nview + PER_PAGE - 1) / PER_PAGE;
+    pr("\n=== BASIC-OS: ");
+    if (filt[0]) { prnum((unsigned)nview); pr(" de "); }
+    prnum((unsigned)napps); pr(" programas");
+    if (filt[0]) { pr(filt_tag ? "  etiqueta: " : "  buscando: "); pr(filt); }
+    if (pages > 1) { pr("  pagina "); prnum((unsigned)page + 1); pr("/"); prnum((unsigned)pages); }
+    pr(" ===\n");
+    if (!nview)
+        pr("Nada coincide. F (solo) quita el filtro.\n");
+    for (i = page * PER_PAGE; i < nview && i < (page + 1) * PER_PAGE; i++) {
+        const struct app *a = &apps[view[i]];
+        prnum((unsigned)view[i] + 1); pr(") ");
+        pr(a->name); pr(a->inst ? " [en disco]  " : "  "); prsize(a->size);
+        if (a->desc[0]) { pr("  - "); pr(a->desc); }
+        pr("\n");
+    }
+    if (truncated) { pr("(el hub tiene mas de "); prnum(MAXAPPS); pr(" programas: solo se ven los primeros)\n"); }
+    pr("\nNumero = ejecutar (del disco si ya esta, si no se baja y se guarda)   +N = bajar otra vez   -N = borrar del disco\n"
+       "F texto = buscar   T = etiquetas   T etiqueta = solo esa   flechas (o N / A) = cambiar de pagina\n"
+       "S = subir un paquete   C = compilar un .BAS a .BIN   R = recargar   U = hub   Q = salir\n");
+}
+
+/* leer una linea corta con eco; devuelve la longitud, -1 si ESC.
+ * Con arrows != 0 (solo el menu principal) una flecha con la linea vacia devuelve -2 y deja en arrow_dir +1 (derecha/abajo) o -1 (izquierda/arriba). */
+static int arrows, arrow_dir;
 static int readline(char *buf, int max, int invert)
 {
     int len = 0;
     for (;;) {
         int c = K->poll();
         if (!c) { K->sleep(5); continue; }
+        if (arrows && len == 0 && (c == KEY_RIGHT || c == KEY_DOWN || c == KEY_LEFT || c == KEY_UP)) {
+            arrow_dir = (c == KEY_RIGHT || c == KEY_DOWN) ? 1 : -1;
+            buf[0] = 0;
+            return -2;
+        }
         if (invert) {                           /* BASIC-OS entrega MAYUSCULAS por defecto: sin Shift = minusculas, como en NET */
             if (c >= 'a' && c <= 'z') c -= 32;
             else if (c >= 'A' && c <= 'Z') c += 32;
@@ -844,7 +974,7 @@ static void upload(void)
         for (i = 0; what[i]; i++) name[i] = what[i];
         name[i] = 0;
     }
-    pr("Descripcion (una linea, Enter = ninguna): ");
+    pr("Descripcion (una linea, mejor con [etiqueta] al inicio: [juego] Mi juego; Enter = ninguna): ");
     if (readline(desc, 56, 0) < 0) return;
     if (hubkey[0]) {
         for (i = 0; hubkey[i]; i++) key[i] = hubkey[i];
@@ -973,7 +1103,7 @@ static void ask_hub(void)
 
 int mod_main(const struct kapi *k)
 {
-    char line[16];
+    char line[40];
     int loaded = 0;
     K = k;
     pr("\nBASIC-OS PKG: tienda de programas por HTTPS\n");
@@ -1002,9 +1132,23 @@ int mod_main(const struct kapi *k)
         else
             pr("\nU = direccion del hub   S = subir un paquete   C = compilar un .BAS   R = reintentar   Q = salir\n");
         pr("> ");
+        arrows = 1;
         n = readline(line, sizeof line, 0);
+        arrows = 0;
+        if (n == -2) { page += arrow_dir; if (page < 0) page = 0; pr("\n"); continue; }
         if (n < 0 || line[0] == 'q' || line[0] == 'Q' || line[0] == 0)
             break;
+        if ((line[0] == 'f' || line[0] == 'F' || line[0] == '/') && (line[1] == 0 || line[1] == ' ' || line[0] == '/')) {
+            set_filter(line + 1, 0);
+            continue;
+        }
+        if ((line[0] == 't' || line[0] == 'T') && (line[1] == 0 || line[1] == ' ')) {
+            if (line[1] == ' ' && line[2]) set_filter(line + 1, 1);
+            else { show_tags(); }
+            continue;
+        }
+        if ((line[0] == 'n' || line[0] == 'N') && line[1] == 0) { page++; continue; }
+        if ((line[0] == 'a' || line[0] == 'A') && line[1] == 0) { if (page > 0) page--; continue; }
         if (line[0] == 'u' || line[0] == 'U') {
             ask_hub();
             loaded = hub[0] ? fetch_list() : 0;

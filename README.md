@@ -309,6 +309,8 @@ En el sistema: `PKG`, tecla **C**, el nombre de un programa guardado con `SAVE` 
 carpeta `store/` de tu repo de GitHub), te deja elegir uno, comprueba su SHA-256 y lo ejecuta.
 Si arrancaste de un disco FAT16 que ve la BIOS (el que crea `INSTALL`), PKG guarda cada programa en `HDn.1:/APPS/` y la proxima vez lo ejecuta desde el disco sin red (`+N` lo baja otra vez, `-N` lo borra). El kernel sigue siendo de solo lectura: el escritor FAT16 vive dentro de `PKG.APP`.
 
+**Buscar (cuando hay muchos paquetes):** la lista sale de 12 en 12 (las flechas, o `N` y `A`, cambian de página). `F texto` filtra por nombre o descripción (`F` solo quita el filtro), `T` lista las etiquetas con cuántos paquetes tiene cada una y `T juego` muestra solo esa. La etiqueta es el `[texto]` con que empieza la descripción al subir (`[juego] Mi juego`). Los números no cambian al filtrar: son los de la lista completa. Hasta 400 paquetes.
+
 **Paquetes:** `NOMBRE.BIN` (módulo, se ejecuta) o `NOMBRE.BAS` (programa BASIC en texto: PKG lo carga y sale; escribe `RUN`).
 **Subir (tecla S en PKG):** escribe el nombre de un programa guardado con `SAVE` (se sube como `NOMBRE.BAS`) o la ruta de un
 archivo de la partición (`HD0.1:APPS/MIAPP.BIN`), el nombre en el hub y una descripción. Viaja por HTTPS como POST a
