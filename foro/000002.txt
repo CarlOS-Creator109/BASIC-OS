@@ -24,3 +24,9 @@ Decia que me confundio al llegar al limite de una linea
 pense que era ell limite de caracteres del mensaje completo
 Al dar Enter pude seguir escribiendo, pero creia que estaba enviando
 mensajes separados, despues descubri que Enter crea otra linea y una line
+== Nomura | 2026-11-19 09:07 UTC
+Nomura denuevo :(
+Jajaj decia, que tema limmites d ecaracteres de linea y caracteres
+restantes del mensaje completo, deberiia haber mas feedback e
+al respecto para facilitar el uso, o permmitir qye el texto pase
+automaticamente a la siguiente linea.
