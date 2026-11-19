@@ -847,7 +847,12 @@ static void w_mouse(struct wctx *c, int x, int y, int btn, int prev)
     on_big(mouse_impl);
 }
 static void w_resize(struct wctx *c) { bos_enter(); C = c; on_big(redraw_all); }
-static void w_stop(struct wctx *c) { bos_enter(); C = c; on_big(stop_impl); bos_linux_stop(); }
+static uint64_t heap_base;
+static void w_stop(struct wctx *c)
+{
+    bos_enter(); C = c; on_big(stop_impl); bos_linux_stop();
+    if (heap_base) { K->ram(RAM_FREE, heap_base, 0, 0); heap_base = 0; }   /* los bancos vuelven al kernel */
+}
 
 static struct wapp app = { "MPLAY", 640, 400, 400, 240, 1, w_start, w_frame, w_key, w_mouse, w_resize, w_stop };
 
@@ -869,20 +874,40 @@ static int init_main(int argc, char **argv, char **envp)
     return 0;
 }
 
+/* memoria de FFmpeg: con kapi 7 se piden bancos al kernel (salto de RAM: los que esten libres, hasta 1 GB) y se
+ * devuelven al cerrar; con un kernel viejo se usa todo desde HEAP_LO hasta el final del primer GB, como antes */
+#define WANT_BANKS 32
+#define MIN_BANKS  2
+
 int mod_main(const struct kapi *k)
 {
-    uint64_t end = ram_end();
+    uint64_t lo = HEAP_LO, hi = ram_end();
     K = k;
-    if (end < NEED_RAM) {
-        K->print("\nMPLAY necesita al menos 240 MB de RAM (en QEMU: -m 512).\n");
-        return 1;
-    }
     if (!BI->gfx || !BI->fb) {
         K->print("\nMPLAY necesita modo grafico.\n");
         return 1;
     }
-    if (!bos_linux_start(k, HEAP_LO, end, init_main))
+    heap_base = 0;
+    if (K->ver >= 7 && K->ram) {
+        unsigned n = (unsigned)K->ram(RAM_INFO, 0, 1, 0);
+        if (n > WANT_BANKS) n = WANT_BANKS;
+        for (; n >= MIN_BANKS && !heap_base; n--)
+            heap_base = K->ram(RAM_ALLOC, 0, n, "MPLAY");
+        if (!heap_base) {
+            K->print("\nMPLAY: no hay bancos de RAM libres (necesita 64 MB seguidos; mira RAM en BASIC).\n");
+            return 1;
+        }
+        lo = heap_base;
+        hi = heap_base + (uint64_t)(n + 1) * K->ram(RAM_INFO, 0, 2, 0);
+    } else if (hi < NEED_RAM) {
+        K->print("\nMPLAY necesita al menos 240 MB de RAM (en QEMU: -m 512).\n");
         return 1;
+    }
+    if (!bos_linux_start(k, lo, hi, init_main)) {
+        if (heap_base) K->ram(RAM_FREE, heap_base, 0, 0);
+        heap_base = 0;
+        return 1;
+    }
     K->wm_publish(&app);
     return MOD_WINAPP;
 }

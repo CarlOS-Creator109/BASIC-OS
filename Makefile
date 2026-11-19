@@ -33,7 +33,7 @@ LIBO    := lib.o
 endif
 LDFLAGS := -m $(LDEMU) -z max-page-size=0x1000 -T linker.ld -nostdlib -z noexecstack --no-warn-rwx-segments
 
-OBJS := $(ENTRYO) kernel.o vga.o kbd.o $(LIBO) sysinfo.o basic.o store.o pci.o mouse.o bios.o blk.o fs.o mmio.o usb.o \
+OBJS := $(ENTRYO) kernel.o vga.o kbd.o $(LIBO) ram.o sysinfo.o basic.o store.o pci.o mouse.o bios.o blk.o fs.o mmio.o usb.o \
         hda.o ac97.o audio.o atapi.o cd.o sys.o module.o fb.o
 
 # todas las versiones; la de video solo si hay un .BVC (make VIDEO=mi.bvc)

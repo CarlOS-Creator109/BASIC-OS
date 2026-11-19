@@ -19,7 +19,8 @@ void         plat_reboot(void);
 int          plat_peek(unsigned int addr);
 void         plat_poke(unsigned int addr, int val);
 unsigned int plat_seed(void);
-int          plat_pci_line(int i, char *out);   /* texto del dispositivo PCI i, 0 = no hay mas */
+int          plat_pci_line(int i, char *out);
+int          plat_ram_line(int i, char *out);   /* linea i del comando RAM (bancos), 0 = no hay mas */   /* texto del dispositivo PCI i, 0 = no hay mas */
 int          plat_drive_line(int i, char *out);  /* linea de DRIVES, 0 = no hay mas */
 const char  *plat_audio_info(void);             /* estado del audio (texto) */
 int          plat_mouse(int what);              /* 0 = x, 1 = y (coordenadas de PLOT), 2 = botones */

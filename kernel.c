@@ -22,6 +22,7 @@ int  plat_mouse(int what)                 { return vga_mouse_get(what); }
 int  plat_drive_line(int i, char *out)    { return blk_line(i, out); }
 const char *plat_audio_info(void)         { return audio_info(); }
 int  plat_pci_line(int i, char *out)      { return pci_line(i, out); }
+int  plat_ram_line(int i, char *out)      { return ram_line(i, out); }
 int  plat_gfx_w(void)                     { return vga_gfx_w(); }
 int  plat_gfx_h(void)                     { return vga_gfx_h(); }
 void plat_plot(int x, int y, int c)       { vga_plot(x, y, c); }
@@ -183,7 +184,7 @@ const struct kapi kernel_api = {
     (int (*)(const char *, int, unsigned long long, unsigned, void *))blk_api,
     api_saved,
     basic_do, basic_eval, vga_col,
-    fb_overlay
+    fb_overlay, ram_api
 };
 
 static int is_gui(const char *n)
@@ -245,7 +246,7 @@ int plat_peek(unsigned int addr)
     if (addr == C64_BORDER) return vga_get_border();
     if (addr == C64_BG)     return vga_get_bg();
     if (addr == C64_FG)     return vga_get_fg();
-    if (addr >= MEM_LIMIT)  return 0;
+    if (!ram_ok(addr))      return 0;
     return *(volatile u8 *)(unsigned long)addr;
 }
 
@@ -254,7 +255,7 @@ void plat_poke(unsigned int addr, int v)
     if (addr == C64_BORDER) { vga_set_border(v); return; }
     if (addr == C64_BG)     { vga_set_bg(v); return; }
     if (addr == C64_FG)     { vga_set_fg(v); return; }
-    if (addr >= MEM_LIMIT)  return;
+    if (!ram_ok(addr))      return;
     *(volatile u8 *)(unsigned long)addr = (u8)v;
 }
 
@@ -440,6 +441,7 @@ void kmain(void)
 
     int i;
 
+    ram_init();
     vga_init();
     vga_splash(0, "INICIANDO...");
     mouse_init();

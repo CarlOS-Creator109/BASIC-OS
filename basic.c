@@ -1645,7 +1645,7 @@ static void st_help(void)
     puts_("SOUND KICK|SNARE,HZ,MS  HIHAT,MS  OFF\n");
     puts_("SOUND DRUMKIT,HZ,KIT(0-3),MS  SNDWAIT\n");
     puts_("CDTOC CDPLAY [N] CDSTOP CDEJECT CDSTAT\n");
-    puts_("DESKTOP  YAAI  BASHTERM  TINYCORE  NET  PKG  FORO  KEYB  INSTALL  PLAY \"X.BVC\"  SAY \"TEXTO\"  EXEC \"X.APP\"  LOAD \"\" = PONG\n");
+    puts_("DESKTOP  YAAI  BASHTERM  TINYCORE  NET  PKG  FORO  KEYB  RAM  INSTALL  PLAY \"X.BVC\"  SAY \"TEXTO\"  EXEC \"X.APP\"  LOAD \"\" = PONG\n");
     puts_("LOCATE COL,ROW  (TEXT CURSOR)\n");
     puts_("UNIX = LS CAT RM CLEAR MAN... (ATAJOS PARA LINUX)\n");
     puts_("PCI = LIST PCI DEVICES\n");
@@ -1811,6 +1811,15 @@ static void exec_statement(void)
         st_drives();
     } else if (kw("SCRATCH") || kw("DELETE")) {
         st_scratch();
+    } else if (kw("RAM") || kw("BANCOS")) {
+        char ln[96];
+        int i;
+        for (i = 0; plat_ram_line(i, ln); i++) {
+            puts_(ln);
+            plat_putc('\n');
+            if (plat_break())
+                break;
+        }
     } else if (kw("PCI") || kw("LSPCI")) {
         char ln[64];
         int i;

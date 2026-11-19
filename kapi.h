@@ -18,7 +18,7 @@
 #ifndef KAPI_H
 #define KAPI_H
 
-#define KAPI_VER 6
+#define KAPI_VER 7
 #define FONT_ADDR 0x6800            /* fuente 8x16: 16 bytes por caracter, 256 caracteres */
 
 /* tipos de SOUND (los usa tambien el kernel) */
@@ -31,6 +31,11 @@
 #define SND_SNARE    6
 #define SND_DRUMKIT  7
 #define SND_OFF      8
+
+#define RAM_ALLOC   0
+#define RAM_FREE    1
+#define RAM_FREEALL 2
+#define RAM_INFO    3
 
 #define BTN_LEFT   1
 #define BTN_RIGHT  2
@@ -143,6 +148,9 @@ struct kapi {
      * no lo pisa. op 0 = poner (r = x,y,w,h en coordenadas de pantalla logicas; vuelve con el rectangulo en pixeles reales),
      * op 1 = quitar, op 2 = ya pinte (redibuja el cursor encima). Solo una a la vez; quitalo al perder el foco. */
     int  (*overlay)(int op, int *r);
+    /* v7: bancos de RAM de 32 MB ("salto de RAM", ver ram.c). op = RAM_ALLOC (n bancos seguidos -> direccion o 0),
+     * RAM_FREE (a = direccion), RAM_FREEALL (who = dueno), RAM_INFO (n: 0 total, 1 libres, 2 tamano, 3 fin de RAM) */
+    unsigned long long (*ram)(int op, unsigned long long a, unsigned n, const char *who);
 };
 
 /* codigos de retorno de mod_main */

@@ -213,6 +213,9 @@ const char *bos_args(void);
 int  bos_readline(char *buf, int max);      /* lee una linea con eco; -1 si ESC */
 int  bos_read_file(const char *spec, char *buf, int max);   /* lee un archivo (HD0.1:/RUTA/X.TXT); bytes o <0 */
 unsigned bos_seed(void);
+void *bos_ram(unsigned banks);              /* pide bancos de RAM de 32 MB seguidos (salto de RAM); NULL si no hay */
+int   bos_ram_free(void *p);                /* devuelve los bancos que dio bos_ram */
+unsigned bos_ram_info(int what);            /* 0 = bancos en total, 1 = libres, 3 = MB de RAM */
 #define sleep_ms bos_sleep
 
 #endif

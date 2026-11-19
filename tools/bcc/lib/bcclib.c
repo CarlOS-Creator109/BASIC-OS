@@ -60,6 +60,9 @@ int bos_scr_w(void) { return (int)__kcall(__KO_scr_w); }
 int bos_scr_h(void) { return (int)__kcall(__KO_scr_h); }
 void bos_mouse(int *x, int *y, int *b) { __kcall(__KO_mouse, x, y, b); }
 unsigned bos_seed(void) { return (unsigned)__kcall(__KO_seed); }
+void *bos_ram(unsigned n) { return (void *)__kcall(__KO_ram, 0, 0, n, "BCC"); }
+int bos_ram_free(void *p) { return (int)__kcall(__KO_ram, 1, p, 0, 0); }
+unsigned bos_ram_info(int w) { unsigned long v = (unsigned long)__kcall(__KO_ram, 3, 0, w == 3 ? 3 : w, 0); return w == 3 ? (unsigned)(v >> 20) : (unsigned)v; }
 const char *bos_args(void) { char **p = (char **)((char *)__K + __KO_args); return *p ? *p : ""; }
 
 int bos_key(void)

@@ -166,6 +166,12 @@ void mouse_byte(u8 b);
 void mouse_raw_mode(int on);
 int  mouse_raw_get(int *dx, int *dy);
 
+/* ram.c: bancos de RAM de 32 MB */
+void ram_init(void);
+u64  ram_api(int op, u64 a, unsigned n, const char *who);
+int  ram_line(int i, char *out);
+int  ram_ok(u64 addr);
+
 /* kbd.c */
 void kbd_poll(void);
 int  kbd_getc(void);

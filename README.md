@@ -96,6 +96,7 @@ PKG, INSTALL) se compila para 32 bits.
 | `fs.c` | Lectura de FAT12/16/32 e ISO9660 sobre cualquier disco |
 | `usb.c` / `mmio.c` | Driver EHCI + almacenamiento masivo (BOT/SCSI); `map_mmio` mapea registros sin caché |
 | `hda.c` | Audio Intel HDA: CORB/RIRB, descubre la ruta pin→DAC y reproduce un tono por DMA |
+| `ram.c` | Bancos de RAM de 32 MB (`K->ram`, comando `RAM`) y mapeo de toda la RAM sobre 1 GB |
 | `kbd.c` | Teclado PS/2 (set 1) con tres distribuciones: ES (España), LA (latinoamericana) y US. Se elige al arrancar con las flechas o con `KEYB`; sin teclas muertas. Letras en MAYÚSCULAS; Shift o Bloq Mayús = minúsculas. Cursor parpadeante |
 | `lib.c` | `memset`, `memcpy`, `memmove`, `memcmp`, `strlen` |
 | `tools/cosmos/` + `sys/cosmosapp.c` | Navegador COSMOS: motor MM de Cosmos Browser (`html.c`, `layout.c`), libc mínima, pintado y red (`cosmosmm.c`) → `COSMOS.BIN` en la partición FAT; `COSMOS.APP` lo carga |
@@ -327,6 +328,23 @@ Los programas son modulos PCBM enlazados a **0x9000000**; `make store` compila `
 La direccion del hub va en `HUB.CFG` (`make pc-basic-doom.img HUB_URL=https://...`) o se escribe con la tecla `U`; no hay una por defecto a proposito.
 Guia completa de despliegue y seguridad: [`hub/README.md`](hub/README.md).
 
+## Bancos de RAM ("salto de RAM", comando RAM)
+La memoria alta se reparte en **bancos de 32 MB** a partir de `0x9000000`. Un programa pide N bancos seguidos y el kernel le da
+los primeros que estén libres; si ya están ocupados salta a los siguientes, hasta que se acabe la RAM. Al terminar los devuelve.
+
+- `RAM` (o `BANCOS`) en BASIC muestra el mapa: cuánta RAM hay, cuántos bancos están libres y quién tiene cada uno. Los huecos
+  donde la BIOS dice que no hay RAM (por ejemplo el hueco PCI debajo de 4 GB) salen como `(SIN RAM)`.
+- **Banco 0** (`0x9000000`) = `TIENDA`: el programa de la tienda que está corriendo. **Banco 1** (`0xB000000`) = `SISTEMA`: buzón de
+  NET, lista de PKG, escritor FAT, tablas de PLAY y las tablas de página. Esos dos son fijos; del banco 2 en adelante se prestan.
+- El kernel ahora mapea **toda** la RAM que reporta la BIOS (antes solo el primer GB), con páginas de 2 MB. `PEEK`/`POKE` también
+  llegan ahí. En 32 bits el límite es lo que cabe debajo de 4 GB.
+- Para los módulos: `K->ram(RAM_ALLOC, 0, n, "NOMBRE")` da la dirección del primer banco (0 si no hay), `K->ram(RAM_FREE, dir, 0, 0)`
+  los devuelve, `RAM_FREEALL` devuelve todo lo de un dueño y `RAM_INFO` da el total, los libres, el tamaño y el final de la RAM (kapi v7).
+  En C con BCC: `bos_ram(n)`, `bos_ram_free(p)` y `bos_ram_info(...)`.
+- **MPLAY** ya pide sus bancos (hasta 1 GB, lo que haya libre; mínimo 64 MB) y los devuelve al cerrar, en vez de quedarse con toda la RAM.
+- Lo siguiente: que PKG, FORO, COSMOS, PLAY y NET.BIN también pidan bancos (así se podrán usar mientras MPLAY está abierto) y que los
+  `.BIN` traigan tabla de reubicación para correr en cualquier banco, no solo en el 0.
+
 ## Teclado (KEYB)
 Al arrancar, después de la pantalla de carga, aparece un menú para elegir el teclado con las **flechas** y **Enter**:
 **ES** (España, el de siempre), **LA** (latinoamericano) o **US** (Estados Unidos). Sale marcado el que elegiste la última vez y,
@@ -439,9 +457,10 @@ con su propio **icono**. Se instala desde `PKG` (queda en `APPS` del disco) y de
 - **Plugin AV1 (`MPLAYAV1.BIN`):** va aparte, porque es otra librería (dav1d, ~1.9 MB). Se baja con `PKG` como cualquier paquete
   y MPLAY lo carga solo cuando un video es AV1 (YouTube manda AV1 muy seguido). Sin el plugin, MPLAY avisa y deja oír el audio.
   Los plugins siguen `tools/mplay/plugin.h`: un `.BIN` enlazado en 0xAA00000 que devuelve una tabla de funciones (abrir, mandar, sacar cuadros…).
-- **RAM:** el archivo se carga entero en memoria. Hacen falta al menos 240 MB y unos 60 MB libres más que el archivo (en QEMU usa `-m 512`).
+- **RAM:** el archivo se carga entero en memoria. MPLAY pide bancos de RAM al kernel (hasta 1 GB de lo que esté libre, mínimo 64 MB) y
+  los devuelve al cerrar; el video tiene que caber en eso con unos 60 MB de sobra (en QEMU usa `-m 512` o más).
 - **Cómo funciona:** FFmpeg se compila con **musl** como si fuera para Linux. `tools/mplay/linux.c` es una capa de "Linux falso":
-  `SYSCALL` cae en ella y traduce lo que pide musl a la kapi (`write` a la consola, `mmap` a la RAM alta, `clock_gettime` a `K->ms`).
+  `SYSCALL` cae en ella y traduce lo que pide musl a la kapi (`write` a la consola, `mmap` a sus bancos de RAM, `clock_gettime` a `K->ms`).
   En modo ventana musl se queda "residente": cada callback entra con `bos_enter()` y corre en una pila propia de 4 MB (la del kernel es de 32 KB).
 - **Iconos para programas de la tienda:** cualquier `.BIN` puede traer su icono con `BIN_ICON("NOMBRE", "ICB\n...")` (`sys/binicon.h`).
   El escritorio mira la carpeta `APPS` y pone un icono por cada uno; con un clic lo carga y, si devuelve `MOD_WINAPP`, abre su ventana.

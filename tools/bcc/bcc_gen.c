@@ -571,7 +571,7 @@ static void define_kapi_offsets(void)
 #define KO(f) o = scat(o, "#define __KO_" #f " "); o = sfmt_num(o, (i64)__builtin_offsetof(struct kapi, f)); o = scat(o, "\n");
     KO(scr_w) KO(scr_h) KO(poll) KO(mouse) KO(ms) KO(sleep) KO(sound) KO(drive_line) KO(dir) KO(read) KO(esc) KO(seed)
     KO(print) KO(basic_do) KO(basic_eval) KO(col) KO(args) KO(saved) KO(layer) KO(dirty) KO(flush) KO(cursor) KO(pcm_play)
-    KO(pcm_stop) KO(pcm_ms) KO(blk) KO(wm_publish)
+    KO(pcm_stop) KO(pcm_ms) KO(blk) KO(wm_publish) KO(ram)
 #undef KO
     define_text(buf);
 }
