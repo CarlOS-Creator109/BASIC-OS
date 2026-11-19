@@ -30,3 +30,13 @@ Jajaj decia, que tema limmites d ecaracteres de linea y caracteres
 restantes del mensaje completo, deberiia haber mas feedback e
 al respecto para facilitar el uso, o permmitir qye el texto pase
 automaticamente a la siguiente linea.
+== Carlos | 2026-11-19 10:23 UTC
+si, estare trabajando en eso nomura, nomas que ahorita no puedo pero mira en
+un rato seguramente pueda arreglar eso junto a otros poblemas del sistema
+operativo, ah porcierto la interfaz de FORO de SDL en github ya trae lo de el
+salto de linea, revisare eso tambien en el sistema junto a el tremendo port
+que estoy haciendo de formatos de video y la cosa, y si lo del teclado lo
+entiendo y tambien estoy con eso, por que claro aunque se que puedes tocar el
+codigo para hacerlo tu mismo yo soy el creador y no me puedo quedar de brasos
+crusados, perdon si no es respondido pero bueno, estare escuchando tus
+peticiones mi querido USER.
