@@ -350,7 +350,7 @@ static char cur[URLMAX], want[URLMAX];
 static char addr[URLMAX];
 static int addr_focus = 1, addr_fresh;
 static char status[200], hover[URLMAX];
-static unsigned load_ms;
+static unsigned load_ms, net_ms, page_ms, draw_ms;
 
 /* ---- formularios: el campo con el foco se edita aqui y se guarda en su atributo value ---- */
 #define FMAX 1024
@@ -536,10 +536,13 @@ static void draw_page(void)
 
 static void redraw(void)
 {
+    unsigned t0;
     if (!Wc || closed)
         return;
     PIX = Wc->pix; STR = Wc->stride; WW = Wc->w; WH = Wc->h;
+    t0 = K->ms();
     draw_page();
+    draw_ms = K->ms() - t0;
     draw_bar();
     draw_status();
     Wc->damage(Wc, 0, 0, WW, WH);
@@ -655,7 +658,32 @@ static void cat(char *d, int *k, int max, const char *s)
 }
 
 /* baja url a STASH; devuelve los bytes o -1 (el porque queda en netlog) */
-static long net_fetch(const char *url)
+/* lo que dio el DHCP, para no esperarlo en cada pagina: "ifopen net0;set net0/ip ...;..." */
+static char netcfg[200];
+static void remember_net(void)
+{
+    char *p = strstr(netlog, "BOSIP "), *f[4];
+    int n = 0, k = 0;
+    if (!p) return;
+    p += 6;
+    while (n < 4) {                               /* ip mascara puerta dns */
+        while (*p == ' ') p++;
+        if (!*p || *p == '\n') break;
+        f[n++] = p;
+        while (*p && *p != ' ' && *p != '\n') p++;
+        if (*p == ' ') *p++ = 0; else if (*p == '\n') { *p = 0; break; }
+    }
+    if (n < 2 || !strchr(f[0], '.')) return;
+    netcfg[0] = 0;
+    cat(netcfg, &k, sizeof netcfg, "ifopen net0;set net0/ip ");
+    cat(netcfg, &k, sizeof netcfg, f[0]);
+    cat(netcfg, &k, sizeof netcfg, ";set net0/netmask ");
+    cat(netcfg, &k, sizeof netcfg, f[1]);
+    if (n > 2 && strchr(f[2], '.')) { cat(netcfg, &k, sizeof netcfg, ";set net0/gateway "); cat(netcfg, &k, sizeof netcfg, f[2]); }
+    if (n > 3 && strchr(f[3], '.')) { cat(netcfg, &k, sizeof netcfg, ";set dns "); cat(netcfg, &k, sizeof netcfg, f[3]); }
+}
+
+static long net_fetch2(const char *url, int retry)
 {
     struct mbox *m = (struct mbox *)(unsigned long)MBOX;
     char enc[URLMAX * 3], part[128];
@@ -672,7 +700,11 @@ static long net_fetch(const char *url)
     enc[k] = 0;
     k = 0;
     netcmd[0] = 0;
-    cat(netcmd, &k, sizeof netcmd, "dhcp");
+    /* la primera vez dhcp (y se anota lo que dio); las siguientes, esa misma configuracion sin esperar al DHCP */
+    if (netcfg[0])
+        cat(netcmd, &k, sizeof netcmd, netcfg);
+    else
+        cat(netcmd, &k, sizeof netcmd, "dhcp;echo BOSIP ${net0/ip} ${net0/netmask} ${net0/gateway} ${dns}");
     for (i = 0; enc[i]; ) {                   /* la URL en trozos de 100 letras: set u0 ...;set u1 ... */
         char nm[24];
         int pl = 0;
@@ -696,10 +728,19 @@ static long net_fetch(const char *url)
         net_print("No encuentro NET.BIN en la particion FAT (usa pc-basic-doom.img o super-basicos.img).\n");
         return -1;
     }
-    if (m->magic != MBOX_MAGIC || m->app_len == 0)
+    if (m->magic != MBOX_MAGIC || m->app_len == 0) {
+        if (netcfg[0] && !retry) {                /* la red cambio? otra vez con dhcp */
+            netcfg[0] = 0;
+            return net_fetch2(url, 1);
+        }
         return -1;
+    }
+    if (!netcfg[0])
+        remember_net();
     return (long)m->app_len;
 }
+
+static long net_fetch(const char *url) { return net_fetch2(url, 0); }
 
 static int is_drive_path(const char *u)
 {
@@ -946,12 +987,17 @@ static void do_load(void)
         else
             set_page((const char *)(unsigned long)STASH, r, u), n = r;
     } else {
+        unsigned tn = K->ms();
         n = net_fetch(u);
+        net_ms = K->ms() - tn;
         if (n < 0)
             error_page(u, "No se pudo bajar. Revisa la direcci\xc3\xb3n, el cable de red y que la p\xc3\xa1gina exista "
                           "(iPXE no muestra p\xc3\xa1ginas de error 404/500)."), failed = 1;
-        else
+        else {
+            unsigned tp = K->ms();
             set_page((const char *)(unsigned long)STASH, n, u);
+            page_ms = K->ms() - tp;
+        }
     }
     load_ms = K->ms() - t0;
     scopy(cur, u, URLMAX);
@@ -973,8 +1019,8 @@ static void do_load(void)
     else if (mm_oom)
         snprintf(status, sizeof status, "La p\xc3\xa1gina es demasiado grande: se ve solo una parte");
     else
-        snprintf(status, sizeof status, n >= 10240 ? "Listo: %d KB en %d ms" : "Listo: %d bytes en %d ms",
-                 (int)(n >= 10240 ? n / 1024 : n > 0 ? n : 0), (int)load_ms);
+        snprintf(status, sizeof status, n >= 10240 ? "Listo: %d KB en %d ms (red %d, pagina %d)" : "Listo: %d bytes en %d ms (red %d, pagina %d)",
+                 (int)(n >= 10240 ? n / 1024 : n > 0 ? n : 0), (int)load_ms, (int)net_ms, (int)page_ms);
     {   /* el estado se dibuja con CP437 */
         static char st2[200];
         const char *s = status, *e = s + strlen(s);

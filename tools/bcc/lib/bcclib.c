@@ -60,6 +60,14 @@ int bos_scr_w(void) { return (int)__kcall(__KO_scr_w); }
 int bos_scr_h(void) { return (int)__kcall(__KO_scr_h); }
 void bos_mouse(int *x, int *y, int *b) { __kcall(__KO_mouse, x, y, b); }
 unsigned bos_seed(void) { return (unsigned)__kcall(__KO_seed); }
+static int __kver(void) { return *(unsigned *)((char *)__K + __KO_ver); }
+int bos_tarea(void (*fn)(void *), void *arg, const char *n) { if (__kver() < 8) return -1; return (int)__kcall(__KO_task, 0, fn, arg, n); }
+void bos_ceder(void) { __flush(); if (__kver() >= 8) __kcall(__KO_task, 1, 0, 0, 0); else __kcall(__KO_poll); }
+void bos_dormir(int ms) { __flush(); if (__kver() >= 8) __kcall(__KO_task, 2, 0, (long)ms, 0); else __kcall(__KO_sleep, ms); }
+int bos_tarea_matar(int n) { return __kver() >= 8 ? (int)__kcall(__KO_task, 4, 0, (long)n, 0) : -1; }
+int bos_tarea_actual(void) { return __kver() >= 8 ? (int)__kcall(__KO_task, 6, 0, 0, 0) : 0; }
+/* al terminar el programa: sus tareas no pueden seguir (su codigo se va a borrar) */
+void __bcc_fin(void) { __flush(); if (__K && __kver() >= 8) __kcall(__KO_task, 5, (void *)0x9000000, (void *)0xB000000, 0); }
 void *bos_ram(unsigned n) { return (void *)__kcall(__KO_ram, 0, 0, n, "BCC"); }
 int bos_ram_free(void *p) { return (int)__kcall(__KO_ram, 1, p, 0, 0); }
 unsigned bos_ram_info(int w) { unsigned long v = (unsigned long)__kcall(__KO_ram, 3, 0, w == 3 ? 3 : w, 0); return w == 3 ? (unsigned)(v >> 20) : (unsigned)v; }
@@ -392,7 +400,7 @@ void *bsearch(const void *key, const void *base, size_t n, size_t size, int (*cm
 }
 char *getenv(const char *name) { (void)name; return NULL; }
 
-void exit(int code) { __flush(); __builtin_exit(code); }
+void exit(int code) { __bcc_fin(); __builtin_exit(code); }
 void abort(void) { bos_print("\nabort()\n"); exit(1); }
 void __bcc_assert(const char *what, const char *file, int line)
 {

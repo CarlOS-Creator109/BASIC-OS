@@ -23,6 +23,7 @@ int  plat_drive_line(int i, char *out)    { return blk_line(i, out); }
 const char *plat_audio_info(void)         { return audio_info(); }
 int  plat_pci_line(int i, char *out)      { return pci_line(i, out); }
 int  plat_ram_line(int i, char *out)      { return ram_line(i, out); }
+int  plat_task_line(int i, char *out)     { return task_line(i, out); }
 int  plat_gfx_w(void)                     { return vga_gfx_w(); }
 int  plat_gfx_h(void)                     { return vga_gfx_h(); }
 void plat_plot(int x, int y, int c)       { vga_plot(x, y, c); }
@@ -118,6 +119,7 @@ static unsigned int api_ms(void)
         t0 = t;
     return (unsigned int)((t - t0) / (hz / 1000));
 }
+unsigned plat_ms_now(void)                { return api_ms(); }
 
 static int api_poll(void)                 { return kbd_inkey(); }
 static void api_mouse(int *x, int *y, int *b)
@@ -184,7 +186,7 @@ const struct kapi kernel_api = {
     (int (*)(const char *, int, unsigned long long, unsigned, void *))blk_api,
     api_saved,
     basic_do, basic_eval, vga_col,
-    fb_overlay, ram_api
+    fb_overlay, ram_api, task_api
 };
 
 static int is_gui(const char *n)

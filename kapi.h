@@ -18,7 +18,7 @@
 #ifndef KAPI_H
 #define KAPI_H
 
-#define KAPI_VER 7
+#define KAPI_VER 8
 #define FONT_ADDR 0x6800            /* fuente 8x16: 16 bytes por caracter, 256 caracteres */
 
 /* tipos de SOUND (los usa tambien el kernel) */
@@ -36,6 +36,15 @@
 #define RAM_FREE    1
 #define RAM_FREEALL 2
 #define RAM_INFO    3
+
+#define TASK_NEW       0
+#define TASK_YIELD     1
+#define TASK_SLEEP     2
+#define TASK_EXIT      3
+#define TASK_KILL      4
+#define TASK_KILLRANGE 5
+#define TASK_SELF      6
+#define TASK_COUNT     7
 
 #define BTN_LEFT   1
 #define BTN_RIGHT  2
@@ -151,6 +160,9 @@ struct kapi {
     /* v7: bancos de RAM de 32 MB ("salto de RAM", ver ram.c). op = RAM_ALLOC (n bancos seguidos -> direccion o 0),
      * RAM_FREE (a = direccion), RAM_FREEALL (who = dueno), RAM_INFO (n: 0 total, 1 libres, 2 tamano, 3 fin de RAM) */
     unsigned long long (*ram)(int op, unsigned long long a, unsigned n, const char *who);
+    /* v8: tareas cooperativas (ver task.c). TASK_NEW fn, arg, nombre -> numero; TASK_YIELD; TASK_SLEEP arg = ms;
+     * TASK_EXIT; TASK_KILL arg = numero; TASK_KILLRANGE fn = desde, arg = hasta; TASK_SELF; TASK_COUNT */
+    long (*task)(int op, void (*fn)(void *), void *arg, const char *name);
 };
 
 /* codigos de retorno de mod_main */

@@ -68,6 +68,11 @@ static char pend[128];
 static int pend_set;
 static unsigned last_service;
 static int in_service;
+/* ventana cuya funcion (frame/key/mouse/resize) se esta ejecutando ahora. Si esa funcion tarda (COSMOS bajando una
+ * pagina con iPXE, por ejemplo) y llama a K->poll(), el kernel vuelve a llamar a service(): entonces se hace un
+ * servicio "anidado" que mueve el raton y pinta las demas ventanas, pero a esa no le manda nada ni la deja cerrar,
+ * y no se abren programas nuevos hasta que termine (podrian pisar su memoria o la de NET). */
+static int cb_win = -1, nested;
 static int last_sec = -1;
 
 static const char *const bgname[NBG] = { "LISO", "AZUL", "PLASMA", "ESTRELLAS", "BARRAS", "FUEGO", "CUBO" };
@@ -767,7 +772,10 @@ static void win_apply_size(struct win *w)
         term_fill(w);
         K->con_resize(w->term, cw / 8, ch / 16);
     } else if (w->app && w->app->resize) {
+        int sv = cb_win;
+        if (!nested) cb_win = (int)(w - wins);
         w->app->resize(&w->ctx);
+        cb_win = sv;
     }
 }
 
@@ -941,6 +949,7 @@ static void launch(const char *name)
 
 static void bw_stop(struct wctx *c)
 {
+    if (K->ver >= 8 && K->task) K->task(TASK_KILLRANGE, (void (*)(void *))0x9000000ul, (void *)0xB000000ul, 0);   /* sus tareas se van con el */
     if (BW_ORIG->stop)
         BW_ORIG->stop(c);
     binwin_clear();
@@ -973,6 +982,8 @@ static void launch_bin(const char *spec)
         return;
     memset((void *)(unsigned long)(BIN_BASE + (unsigned)n), 0, h->end - (BIN_BASE + (unsigned)n));
     r = ((int (*)(const struct kapi *))(unsigned long)h->entry)(K);
+    if (r != MOD_WINAPP)
+        if (K->ver >= 8 && K->task) K->task(TASK_KILLRANGE, (void (*)(void *))0x9000000ul, (void *)0xB000000ul, 0);   /* sus tareas se van con el */
     if (r == MOD_WINAPP) {
         const struct wapp *a = K->wm_take();
         if (a) {
@@ -1184,8 +1195,14 @@ static void toggle_max(int i)
 static void client_event(int i, int px, int py, int b, int pb)
 {
     struct win *w = &wins[i];
-    if (w->app && w->app->mouse)
+    if (nested && i == cb_win)
+        return;                          /* esa ventana esta ocupada (ver cb_win) */
+    if (w->app && w->app->mouse) {
+        int sv = cb_win;
+        if (!nested) cb_win = i;
         w->app->mouse(&w->ctx, px - (w->x + BD), py - (w->y + BD + TH), b, pb);
+        cb_win = sv;
+    }
 }
 
 static void wm_mouse(void)
@@ -1200,11 +1217,15 @@ static void wm_mouse(void)
 
     if (pressed) {
         int i = win_at(mx, my);
+        if (nested && i >= 0 && i == cb_win)
+            return;                      /* la ventana ocupada no se toca hasta que termine */
+        if (nested && i < 0)
+            return;                      /* ni se abren programas mientras otra ventana trabaja */
         if (i >= 0) {
             int part = hit_part(&wins[i], mx, my);
             set_focus(i);
             if (part == P_CLOSE) {
-                if (wins[i].busy)
+                if (wins[i].busy || nested)
                     wins[i].closing = 1;
                 else
                     win_close(i);
@@ -1319,13 +1340,16 @@ static void wm_mouse(void)
 static void service(void)
 {
     unsigned now;
-    int i;
-    if (in_service)
+    int i, was;
+    if (in_service && (cb_win < 0 || nested))
         return;
     now = K->ms();
     if (now - last_service < 14u)
         return;
     last_service = now;
+    was = in_service;
+    if (was)
+        nested = 1;
     in_service = 1;
 
     wm_mouse();
@@ -1334,8 +1358,16 @@ static void service(void)
         struct win *w = &wins[i];
         if (!w->used)
             continue;
-        if (w->app && w->app->frame && !w->term)
-            w->app->frame(&w->ctx);
+        if (w->app && w->app->frame && !w->term) {
+            if (nested) {
+                if (i != cb_win)
+                    w->app->frame(&w->ctx);
+            } else {
+                cb_win = i;
+                w->app->frame(&w->ctx);
+                cb_win = -1;
+            }
+        }
         if (w->term && !w->busy) {       /* cursor parpadeante en la terminal inactiva */
             int want = (i == focus_w) && ((now / 500) & 1);
             if (want != w->cur_on) {
@@ -1344,9 +1376,10 @@ static void service(void)
             }
         }
     }
-    for (i = 0; i < MAXW; i++)
-        if (wins[i].used && wins[i].closing && !wins[i].busy)
-            win_close(i);
+    if (!nested)
+        for (i = 0; i < MAXW; i++)
+            if (wins[i].used && wins[i].closing && !wins[i].busy)
+                win_close(i);
 
     if (bgmode == 6 && now - bg_last >= 33u) {       /* cubo: ~30 cuadros/s, solo se repinta donde estaba y donde esta */
         int ox0 = cb_x0, oy0 = cb_y0, ox1 = cb_x1, oy1 = cb_y1, had = cb_ready;
@@ -1374,7 +1407,10 @@ static void service(void)
         compose(x, y, w, h);
     }
     K->flush();
-    in_service = 0;
+    if (was)
+        nested = 0;
+    else
+        in_service = 0;
 }
 
 static void wm_hook(void)
@@ -1390,8 +1426,11 @@ static void dispatch_key(int k)
         struct win *w = &wins[focus_w];
         if (w->term)
             term_key(w, k);
-        else if (w->app && w->app->key)
+        else if (w->app && w->app->key) {
+            cb_win = focus_w;
             w->app->key(&w->ctx, k);
+            cb_win = -1;
+        }
         return;
     }
     {

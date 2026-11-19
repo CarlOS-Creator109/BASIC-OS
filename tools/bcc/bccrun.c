@@ -43,6 +43,15 @@ static int r_basic_do(const char *s) { printf("[BASIC] %s\n", s); return 0; }
 static int r_basic_eval(const char *e, int *v) { (void)e; *v = 0; return 0; }
 static void r_sound(int k, int hz, int a, int ms) { printf("[SOUND %d %d %d %d]\n", k, hz, a, ms); }
 static void r_mouse(int *x, int *y, int *b) { *x = *y = *b = 0; }
+/* tareas: en Linux se corren de una vez cuando se crean (sin cambio de pila); dormir = esperar */
+static long r_task(int op, void (*fn)(void *), void *arg, const char *name)
+{
+    (void)name;
+    if (op == TASK_NEW && fn) { fn(arg); return 1; }
+    if (op == TASK_SLEEP) usleep((useconds_t)(unsigned long)arg * 1000);
+    return 0;
+}
+static unsigned long long r_ram(int op, unsigned long long a, unsigned n, const char *who) { (void)op; (void)a; (void)n; (void)who; return 0; }
 static int r_read(const char *spec, char *buf, int max, unsigned *total)
 {
     const char *p = strchr(spec, ':');
@@ -80,7 +89,7 @@ int main(int argc, char **argv)
     K.ver = KAPI_VER;
     K.print = r_print; K.poll = r_poll; K.esc = r_esc; K.ms = r_ms; K.sleep = r_sleep; K.seed = r_seed;
     K.scr_w = r_scr; K.scr_h = r_scr; K.basic_do = r_basic_do; K.basic_eval = r_basic_eval; K.sound = r_sound;
-    K.mouse = r_mouse; K.read = r_read; K.args = "";
+    K.mouse = r_mouse; K.read = r_read; K.args = ""; K.task = r_task; K.ram = r_ram;
     entry = (int (*)(const struct kapi *))(unsigned long)h[2];
     return entry(&K);
 }

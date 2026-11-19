@@ -177,6 +177,7 @@ void kbd_poll(void)
 {
     audio_service();                    /* el sonido sigue mientras BASIC espera o calcula */
     gui_tick();                         /* el escritorio sigue vivo mientras BASIC corre */
+    task_yield();                       /* y las tareas de fondo reciben su turno (task.c) */
     while (inb(0x64) & 1) {
         u8 st = inb(0x64);
         u8 sc = inb(0x60);

@@ -96,6 +96,7 @@ PKG, INSTALL) se compila para 32 bits.
 | `fs.c` | Lectura de FAT12/16/32 e ISO9660 sobre cualquier disco |
 | `usb.c` / `mmio.c` | Driver EHCI + almacenamiento masivo (BOT/SCSI); `map_mmio` mapea registros sin caché |
 | `hda.c` | Audio Intel HDA: CORB/RIRB, descubre la ruta pin→DAC y reproduce un tono por DMA |
+| `task.c` | Tareas cooperativas (`K->task`, comando `TAREAS`): pila y registros por tarea, cambio en `kbd_poll()` |
 | `ram.c` | Bancos de RAM de 32 MB (`K->ram`, comando `RAM`) y mapeo de toda la RAM sobre 1 GB |
 | `kbd.c` | Teclado PS/2 (set 1) con tres distribuciones: ES (España), LA (latinoamericana) y US. Se elige al arrancar con las flechas o con `KEYB`; sin teclas muertas. Letras en MAYÚSCULAS; Shift o Bloq Mayús = minúsculas. Cursor parpadeante |
 | `lib.c` | `memset`, `memcpy`, `memmove`, `memcmp`, `strlen` |
@@ -345,6 +346,24 @@ los primeros que estén libres; si ya están ocupados salta a los siguientes, ha
 - Lo siguiente: que PKG, FORO, COSMOS, PLAY y NET.BIN también pidan bancos (así se podrán usar mientras MPLAY está abierto) y que los
   `.BIN` traigan tabla de reubicación para correr en cualquier banco, no solo en el 0.
 
+## Tareas (las bases de los procesos, comando TAREAS)
+BASIC-OS todavía no tiene procesos de verdad: el escritorio es un solo ciclo que llama a cada ventana. Esto es lo primero para
+que deje de trabarse:
+
+- **El escritorio ya no se congela cuando una ventana tarda.** Si una ventana se queda trabajando (COSMOS bajando una página,
+  por ejemplo) y mientras tanto el sistema revisa el teclado, el escritorio hace un "servicio anidado": mueve el ratón, pinta las
+  demás ventanas y el fondo (MPLAY sigue reproduciendo, el cubo sigue girando). A la ventana ocupada no se le manda nada ni se deja
+  cerrar hasta que termine, y mientras tanto no se abren programas nuevos (podrían pisar su memoria o la de NET).
+- **Tareas cooperativas en el kernel** (`task.c`, kapi v8): cada tarea tiene su pila (1 MB, de un banco de RAM `TAREAS`) y sus
+  registros. La CPU cambia de tarea cada vez que alguien espera (el kernel llama a `task_yield()` desde `kbd_poll()`, que es lo que
+  usan todos los bucles que esperan teclas, el escritorio e iPXE). `TAREAS` (o `PS`) en BASIC muestra la lista con su estado.
+  `K->task(TASK_NEW, fn, arg, "NOMBRE")` crea una, `TASK_YIELD` cede la CPU, `TASK_SLEEP` duerme, `TASK_EXIT`/`TASK_KILL` terminan.
+  Cuando un programa de la tienda se cierra, PKG y el escritorio terminan las tareas que dejó (su código se va a borrar).
+- **En C con BCC:** `bos_tarea(funcion, arg, "NOMBRE")` (la función lleva `__callback`), `bos_ceder()`, `bos_dormir(ms)`,
+  `bos_tarea_matar(n)`, `bos_tarea_actual()`.
+- **Lo que sigue:** que el reloj (PIT) cambie de tarea solo cada pocos milisegundos (multitarea preemptiva), y que cada programa
+  corra en su banco de RAM (tabla de reubicación) para que varios `.BIN` vivan a la vez.
+
 ## Teclado (KEYB)
 Al arrancar, después de la pantalla de carga, aparece un menú para elegir el teclado con las **flechas** y **Enter**:
 **ES** (España, el de siempre), **LA** (latinoamericano) o **US** (Estados Unidos). Sale marcado el que elegiste la última vez y,
@@ -479,7 +498,8 @@ maximizar y cambiar de tamaño: la página se vuelve a maquetar al ancho nuevo).
   vacía de golpe al cambiar de página, `snprintf`, `strtod`...). El motor usa `float`: se compila con SSE2 y lo enciende en cada llamada (como SAY).
 - **Red:** carga `NET.BIN` (iPXE) por su cuenta y le pasa `dhcp; set u0 ...; imgfetch ${u0}${u1}...; bosstash` (la URL va troceada en variables de
   iPXE, así no hay límite de 160 letras). HTTP y HTTPS (los mismos certificados que PKG). La salida de iPXE se guarda y aparece en la página de error.
-  Cada página tarda ~3 s de más por el `dhcp`.
+  La primera página hace `dhcp` y COSMOS anota la configuración que dio; las siguientes la reusan sin esperar al DHCP (si la red
+  cambió, vuelve a hacer `dhcp` sola). La barra de estado dice cuánto tardó la red y cuánto la página.
 - **Archivos locales:** escribe `HD0.1:PAGINA.HTM` (o `USB0.1:...`) en la barra.
 - **Barra:** `<` atrás · `>` adelante · `R` recargar · casa = inicio. Si escribes palabras sueltas (sin punto) se buscan en DuckDuckGo Lite;
   `algo.com` se abre como `https://algo.com`; `10.x`/`192.168.x`/`localhost` como `http://`.

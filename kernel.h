@@ -172,6 +172,12 @@ u64  ram_api(int op, u64 a, unsigned n, const char *who);
 int  ram_line(int i, char *out);
 int  ram_ok(u64 addr);
 
+/* task.c: tareas cooperativas */
+void task_yield(void);
+long task_api(int op, void (*fn)(void *), void *arg, const char *name);
+int  task_line(int i, char *out);
+unsigned plat_ms_now(void);             /* kernel.c */
+
 /* kbd.c */
 void kbd_poll(void);
 int  kbd_getc(void);

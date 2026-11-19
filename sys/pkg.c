@@ -514,6 +514,7 @@ static int win_opened;                          /* 1 = el programa abrio una ven
 #define BW_PUB  ((struct wapp *)(unsigned long)(BINWIN_ADDR + 24 + 128))
 static void bw_stop(struct wctx *c)
 {
+    if (K->ver >= 8 && K->task) K->task(TASK_KILLRANGE, (void (*)(void *))0x9000000ul, (void *)0xB000000ul, 0);   /* sus tareas se van con el */
     if (BW_ORIG->stop)
         BW_ORIG->stop(c);
     binwin_clear();
@@ -563,6 +564,7 @@ static int launch(const char *name, u32 n)
             return 1;
         }
     }
+    if (K->ver >= 8 && K->task) K->task(TASK_KILLRANGE, (void (*)(void *))0x9000000ul, (void *)0xB000000ul, 0);   /* sus tareas se van con el */
     pr("\n(PKG) el programa termino.\n");
     return 1;
 }

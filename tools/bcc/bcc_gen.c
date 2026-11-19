@@ -429,7 +429,7 @@ static u64 align_up(u64 v, u64 a) { return (v + a - 1) / a * a; }
 
 static void link_program(void)
 {
-    Obj *v, *mainf = find_func("main"), *kvar = find_func("__K");
+    Obj *v, *mainf = find_func("main"), *kvar = find_func("__K"), *fin = find_func("__bcc_fin");
     Fix *f;
     int i;
     u64 code_base = LOAD_BASE + 16, data_base, bss_base, dsz = 0, bsz = 0, end, saved_rsp, stack_top;
@@ -441,6 +441,7 @@ static void link_program(void)
     nreached = 0;
     reach_obj(mainf);
     reach_obj(kvar);
+    if (fin && fin->is_definition) reach_obj(fin); else fin = 0;
     for (v = globals; v; v = v->next) if (v->callback && v->used) reach_obj(v);
     for (i = 0; i < nreached; i++) {
         Obj *fn = reached_fns[i];
@@ -465,6 +466,7 @@ static void link_program(void)
     E(0x31, 0xC0, 0x50, 0x50);                                   /* argv = argc = 0 */
     E(0xE8); add_fix(FX_CALL, clen, mainf, 0, 0); e4(0);
     exit_pos = clen;
+    if (fin) { E(0x50); E(0xE8); add_fix(FX_CALL, clen, fin, 0, 0); e4(0); E(0x58); }   /* __bcc_fin(): limpiar (tareas...) */
     E(0x48, 0xB8); add_fix(FX_SAVED, clen, 0, 0, 0); e8(0);
     E(0x48, 0x8B, 0x20);                                         /* mov rsp, [rax] */
     E(0x41, 0x5F, 0x41, 0x5E, 0x41, 0x5D, 0x41, 0x5C, 0x5D, 0x5B);
@@ -571,7 +573,7 @@ static void define_kapi_offsets(void)
 #define KO(f) o = scat(o, "#define __KO_" #f " "); o = sfmt_num(o, (i64)__builtin_offsetof(struct kapi, f)); o = scat(o, "\n");
     KO(scr_w) KO(scr_h) KO(poll) KO(mouse) KO(ms) KO(sleep) KO(sound) KO(drive_line) KO(dir) KO(read) KO(esc) KO(seed)
     KO(print) KO(basic_do) KO(basic_eval) KO(col) KO(args) KO(saved) KO(layer) KO(dirty) KO(flush) KO(cursor) KO(pcm_play)
-    KO(pcm_stop) KO(pcm_ms) KO(blk) KO(wm_publish) KO(ram)
+    KO(pcm_stop) KO(pcm_ms) KO(blk) KO(wm_publish) KO(ram) KO(task) KO(ver)
 #undef KO
     define_text(buf);
 }

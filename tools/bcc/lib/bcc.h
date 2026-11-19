@@ -216,6 +216,14 @@ unsigned bos_seed(void);
 void *bos_ram(unsigned banks);              /* pide bancos de RAM de 32 MB seguidos (salto de RAM); NULL si no hay */
 int   bos_ram_free(void *p);                /* devuelve los bancos que dio bos_ram */
 unsigned bos_ram_info(int what);            /* 0 = bancos en total, 1 = libres, 3 = MB de RAM */
+/* tareas (multitarea cooperativa): la funcion tiene que llevar __callback, p. ej.
+ *   __callback void contar(void *arg) { ... }      bos_tarea(contar, 0, "CONTAR");
+ * La CPU cambia de tarea cuando alguna espera (bos_key, bos_dormir, bos_ceder, leer el teclado...). */
+int  bos_tarea(void (*fn)(void *), void *arg, const char *nombre);   /* numero de tarea o -1 */
+void bos_ceder(void);                       /* cede la CPU a las demas tareas */
+void bos_dormir(int ms);                    /* esta tarea duerme ms milisegundos (las demas siguen) */
+int  bos_tarea_matar(int n);
+int  bos_tarea_actual(void);
 #define sleep_ms bos_sleep
 
 #endif
