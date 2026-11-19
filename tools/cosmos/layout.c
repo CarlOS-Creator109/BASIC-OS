@@ -98,11 +98,14 @@ static char *page_str(Ctx *c, const char *s, int n) { return arena_strndup(&c->p
 
 static void emit_ctrl(Ctx *c, Atom *a, int x, int y) {
     int px = a->px;
+    Node *saved = c->curnd;
+    c->curnd = a->nd;                                   /* todo lo del control lleva su nodo (clics, formularios) */
     switch (a->ctype) {
     case CT_CHECK: case CT_RADIO:
         add_rect(c, x, y, a->w, a->h, 0xFFFFFF);
         add_frame(c, x, y, a->w, a->h, 0x767676);
         if (a->checked) add_rect(c, x + a->w / 4 + 1, y + a->h / 4 + 1, a->w / 2 - 1, a->h / 2 - 1, 0x1a56db);
+        c->curnd = saved;
         return;
     case CT_BUTTON:
         add_rect(c, x, y, a->w, a->h, 0xEFEFEF);
@@ -132,6 +135,7 @@ static void emit_ctrl(Ctx *c, Atom *a, int x, int y) {
         t->kind = IT_TEXT; t->x = x + a->w - Z(14); t->y = y + (a->h - px) / 2; t->w = Z(10); t->h = px;
         t->font = FONT_SANS; t->px = px; t->color = 0x444444; t->s = ar; t->len = 3;
     }
+    c->curnd = saved;
 }
 
 static void emit_line(Line *L) {
@@ -382,7 +386,7 @@ static void inline_ctrl(Line *L, Node *n) {
     int px = px_of(c, s);
     Atom a;
     memset(&a, 0, sizeof a);
-    a.kind = A_CTRL; a.px = px; a.href = NULL;
+    a.kind = A_CTRL; a.px = px; a.href = NULL; a.nd = n;   /* el navegador busca el control por su nodo */
     a.space = L->space; a.spw = text_w(FONT_SANS, px, " ", 1);
     char *lab = NULL; int ll = 0;
     if (eq(nm, "input")) {
@@ -433,7 +437,9 @@ static void inline_ctrl(Line *L, Node *n) {
         if (a.w > L->w && c->mode == 0 && L->w > 40) a.w = L->w;
         a.h = (int)(rows * px * 1.3f) + Z(8);
         char buf[200]; int len = 0;
-        gather_text(n, buf, &len, sizeof buf);
+        const char *tv = node_attr(n, "value");          /* lo que se escribio en COSMOS */
+        if (tv) { len = (int)strlen(tv); if (len > 199) len = 199; memcpy(buf, tv, (size_t)len); }
+        else gather_text(n, buf, &len, sizeof buf);
         if (len) { lab = page_str(c, buf, len); ll = len; }
     } else { /* select */
         a.ctype = CT_SELECT;

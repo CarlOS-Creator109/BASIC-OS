@@ -96,7 +96,7 @@ PKG, INSTALL) se compila para 32 bits.
 | `fs.c` | Lectura de FAT12/16/32 e ISO9660 sobre cualquier disco |
 | `usb.c` / `mmio.c` | Driver EHCI + almacenamiento masivo (BOT/SCSI); `map_mmio` mapea registros sin caché |
 | `hda.c` | Audio Intel HDA: CORB/RIRB, descubre la ruta pin→DAC y reproduce un tono por DMA |
-| `kbd.c` | Teclado PS/2 (set 1, distribución español ISO: Shift+2 = `"`, AltGr+2 = `@`, ñ ç ¿ ¡, AltGr para `# | ~ [ ] { } \`; sin teclas muertas). Letras en MAYÚSCULAS; Shift o Bloq Mayús = minúsculas. Cursor parpadeante |
+| `kbd.c` | Teclado PS/2 (set 1) con tres distribuciones: ES (España), LA (latinoamericana) y US. Se elige al arrancar con las flechas o con `KEYB`; sin teclas muertas. Letras en MAYÚSCULAS; Shift o Bloq Mayús = minúsculas. Cursor parpadeante |
 | `lib.c` | `memset`, `memcpy`, `memmove`, `memcmp`, `strlen` |
 | `tools/cosmos/` + `sys/cosmosapp.c` | Navegador COSMOS: motor MM de Cosmos Browser (`html.c`, `layout.c`), libc mínima, pintado y red (`cosmosmm.c`) → `COSMOS.BIN` en la partición FAT; `COSMOS.APP` lo carga |
 | `basic.c` | El intérprete de BASIC (sin dependencias de hardware) |
@@ -105,6 +105,8 @@ PKG, INSTALL) se compila para 32 bits.
 | `sys/wtk.h` | WTK: kit de ventanas (botones, cajas, listas, menús...) para apps y programas de la tienda |
 | `sys/binwin.h` | aviso compartido de "programa de la tienda con ventana abierta" |
 | `sys/foro.c` | FORO.APP: foro de texto (lista de hilos, leer, responder y abrir hilos por el hub) |
+| `sys/fatw.h` | escritor FAT16 mínimo (guarda en `HDn.1:/APPS/`), compartido por PKG y BCC |
+| `tools/bcc/` | BCC, el compilador de C: `bcc.c` (+ `bcc_pp.c`, `bcc_parse.c`, `bcc_gen.c`), la biblioteca en `lib/`, `bccos.c` = BCC.BIN, `bcc_host.c` = versión de Linux, `bccrun.c` = corre un .BIN en Linux |
 | `sys/pkg.c` | PKG.APP: tienda de paquetes (lista, descarga por HTTPS, SHA-256, ejecuta `.BIN` o carga `.BAS`; **S** sube paquetes al hub) |
 | `sys/install.c` | INSTALL.APP: instala el sistema en otro disco o en el mismo USB (particion + FAT16 "BASIC-OS FS") |
 | `sys/doomapp.c` / `sys/doom.c` | DOOM: `DOOM.APP` (en /SYS) carga `DOOM.BIN` (motor PureDOOM + pantalla/teclado/raton) de la partición FAT; ver sección DOOM |
@@ -325,14 +327,26 @@ Los programas son modulos PCBM enlazados a **0x9000000**; `make store` compila `
 La direccion del hub va en `HUB.CFG` (`make pc-basic-doom.img HUB_URL=https://...`) o se escribe con la tecla `U`; no hay una por defecto a proposito.
 Guia completa de despliegue y seguridad: [`hub/README.md`](hub/README.md).
 
+## Teclado (KEYB)
+Al arrancar, después de la pantalla de carga, aparece un menú para elegir el teclado con las **flechas** y **Enter**:
+**ES** (España, el de siempre), **LA** (latinoamericano) o **US** (Estados Unidos). Sale marcado el que elegiste la última vez y,
+si no tocas nada, arranca solo con ese en 8 segundos. La elección se guarda en el disco de arranque (sector 514, el hueco libre
+entre el directorio de `SAVE` y sus datos), así que se recuerda al apagar; desde un CD solo dura hasta reiniciar.
+
+Para cambiarlo después: `KEYB` (abre el mismo menú), o directo `KEYB ES`, `KEYB LA`, `KEYB US`. Afecta a todo: BASIC, el escritorio,
+FORO, COSMOS y los programas de la tienda. Todavía no hay teclas muertas (los acentos con ´ salen como apóstrofo).
+
 ## Foro de texto (FORO + hub + GitHub)
 `FORO` (o `EXEC "FORO.APP"`) es un foro de texto que usa el mismo hub que PKG. El hub guarda cada hilo como un archivo
 `foro/NNNNNN.txt` del repo de GitHub (un commit por mensaje), así que no necesita base de datos y todo queda a la vista en GitHub.
 
 - **Leer:** la lista muestra los hilos con más actividad primero (12 por página, flechas o `+` / `-` para cambiar de página).
   Escribe el número para leer un hilo; se pausa cada pantalla (Enter sigue, Q sale).
-- **Escribir:** `N` = hilo nuevo (título y mensaje), y dentro de un hilo `R` = responder. El mensaje puede tener varias líneas
-  y se termina con una línea vacía. Tu nombre se pide una vez por sesión. Se usa la clave de `HUB.CFG` (2a línea), la misma de PKG.
+- **Escribir:** `N` = hilo nuevo (título y mensaje), y dentro de un hilo `R` = responder. El mensaje se escribe en un editor de
+  pantalla completa: el texto **pasa solo al siguiente renglón** (se corta por palabras), **Enter** hace un renglón nuevo (se pueden
+  dejar renglones en blanco), **Retroceso** puede volver al renglón de arriba, **TAB envía** y **ESC dos veces** descarta. Abajo siempre
+  se ve un contador `[312/1400]` que se pone rojo cerca del límite. La ñ, ¿, ¡ y º del teclado se mandan como UTF-8 (en GitHub y en
+  el cliente SDL se ven bien). Tu nombre se pide una vez por sesión. Se usa la clave de `HUB.CFG` (2a línea), la misma de PKG.
 - **Límites del hub:** 1500 letras por mensaje, 60 mensajes por hilo, 500 hilos, un mensaje cada 15 s y 20 por hora por conexión.
   Como la consola solo pinta ASCII, el hub quita los acentos al mandarlo al sistema (en GitHub se guarda el texto original).
 - **Moderar:** borra o edita el archivo del hilo en GitHub; con el webhook el hub lo nota al instante.
@@ -371,6 +385,45 @@ y el cambio de tamaño. Es una cabecera, así que sirve igual para las apps de `
 el escritorio se abre solo con esa ventana (lo mismo pasa con `EXEC "COSMOS.APP"` o cualquier app de ventana); desde una terminal del escritorio aparece al lado.
 Mientras esa ventana está abierta, su código ocupa la memoria de la tienda (0x9000000), así que PKG, FORO, COSMOS y PLAY esperan
 a que la cierres (`sys/binwin.h`). Solo puede haber un programa de la tienda con ventana a la vez.
+
+## BCC: compilador de C (BASIC-OS COMPILER C)
+BCC compila C a programas `.BIN` de la tienda, para portar programas sin reescribirlos en BASIC. Escribe el código x86-64
+directo (sin ensamblador ni enlazador) y trae su propia biblioteca de C, así que un `.c` normal con `printf`, `malloc`, `strcpy`,
+`fopen`... compila tal cual. Hay dos versiones del mismo compilador:
+
+- **Dentro de BASIC-OS:** `store/BCC.BIN` (paquete de la tienda). Se corre desde PKG, pide el archivo (`HD0.1:/SRC/HOLA.C`), lo compila
+  (unos 50 ms en QEMU) y guarda `HD0.1:/APPS/HOLA.BIN`; luego sale en la lista de PKG con su número. Los `#include "x.h"` se buscan en
+  la misma carpeta del `.c`. Necesita ~180 MB de RAM (como PKG). Todavía no hay un editor de texto en el sistema: el `.c` se copia a la
+  partición desde Linux con mtools: en `super-basicos.img` la FAT empieza en el byte 6291456
+  (`mmd -i super-basicos.img@@6291456 ::/SRC` la primera vez y `mcopy -i super-basicos.img@@6291456 hola.c ::/SRC/HOLA.C`); en
+  `pc-basic-doom.img` y `completo64.img` empieza en 2097152.
+- **En Linux:** `make bcc` hace `tools/bcc/bcc` y `tools/bcc/bccrun`. `tools/bcc/bcc hola.c -o HOLA.BIN` da el mismo `.BIN`, y
+  `tools/bcc/bccrun HOLA.BIN` lo corre en Linux (imita la consola, el teclado y los archivos) para probar sin arrancar el sistema.
+  `make bcc-test` compila las pruebas de `tools/bcc/tests/` con gcc y con BCC y compara las salidas.
+
+**Qué entiende:** `char`/`short`/`int`/`long` con y sin signo, `_Bool`, punteros, arreglos (también de varias dimensiones), `struct`,
+`union`, `enum`, `typedef`, punteros a función, funciones variádicas (`stdarg.h`), `static`, `goto`, `switch`, valores iniciales con
+`{...}` y `.campo =`, cadenas en UTF-8 (se ven bien en la consola: `printf("Año ñandú")`), y el preprocesador completo
+(`#include`, `#define` con argumentos, `#`, `##`, `__VA_ARGS__`, `#if`/`#elif`/`#ifdef`, `#pragma once`).
+**Todavía no:** `float`/`double`, pasar o devolver `struct` por valor (usa punteros), campos de bits y literales compuestos.
+Los errores salen como `HOLA.C:12: error: falta un ';' antes de esto`.
+
+**Biblioteca** (todos los encabezados estándar son el mismo, `lib/bcc.h`): `stdio` (`printf` y familia con `%d %u %x %o %c %s %p`, ancho,
+precisión y `l`/`h`; `puts`, `getchar`, `fgets`, `scanf`/`sscanf` simples, `fopen`/`fgets`/`fread`/`fseek` **solo para leer**),
+`stdlib` (`malloc`/`free`/`realloc`/`calloc`, `atoi`, `strtol`, `qsort`, `bsearch`, `rand`, `exit`), `string.h` completo, `ctype.h`,
+`assert.h`, `time.h` (`clock`, `time` en segundos desde el arranque). Lo que se escribe en la consola sale sin Shift en minúsculas
+(como en FORO). Solo entra al `.BIN` lo que el programa usa (un "hola mundo" pesa ~11 KB).
+
+**Para BASIC-OS** (`#include <bos.h>`): `bos_basic("CIRCLE 100,100,50,7")` ejecuta cualquier sentencia de BASIC (así se dibuja:
+`PLOT`, `LINE`, `BOX`, `CIRCLE`, `COLOR`, `LOCATE`, `CLS`, `SOUND`...), `bos_eval("XMAX", &w)` evalúa una expresión, `bos_key()` espera
+una tecla, `bos_inkey()` sin esperar, `bos_esc()`, `bos_ms()`, `bos_sleep(ms)`, `bos_sound(...)`, `bos_mouse(&x, &y, &b)`,
+`bos_read_file(...)`. Ejemplos en `tools/bcc/ejemplos/` (`hola.c`, `adivina.c`, `dibujo.c`).
+
+**Cómo está hecho:** convención de llamada propia (argumentos en la pila de 8 en 8 bytes, resultado en `rax`), así `stdarg` es trivial;
+para llamar al kernel está la intrínseca `__kcall(__KO_campo, ...)` (convención SysV sobre `struct kapi`), y una función marcada
+`__callback` recibe argumentos SysV (para pasarle funciones al kernel). Cada programa tiene su propia pila de 1 MB en su `.bss` (la del
+kernel es de 32 KB) y el montón va del final del programa hasta 0xB000000. La biblioteca está escrita en C (`lib/bcclib.c`) y viaja dentro
+del compilador (`mklib.py` la convierte en `bcclib.h`); se compila junto con cada programa. El analizador sigue el estilo de chibicc.
 
 ## MPLAY: video con FFmpeg (paquete opcional de la tienda)
 `MPLAY.BIN` es un reproductor de video hecho con **FFmpeg 7.1** que corre dentro de BASIC-OS como una **ventana del escritorio**,
@@ -411,12 +464,17 @@ maximizar y cambiar de tamaño: la página se vuelve a maquetar al ancho nuevo).
 - **Archivos locales:** escribe `HD0.1:PAGINA.HTM` (o `USB0.1:...`) en la barra.
 - **Barra:** `<` atrás · `>` adelante · `R` recargar · casa = inicio. Si escribes palabras sueltas (sin punto) se buscan en DuckDuckGo Lite;
   `algo.com` se abre como `https://algo.com`; `10.x`/`192.168.x`/`localhost` como `http://`.
-- **Teclas:** **Enter** ir · **Tab** entrar/salir de la barra · con la página activa, empezar a escribir abre una dirección nueva ·
+- **Teclas:** **Enter** ir · **Tab** al siguiente campo de la página · con la página activa, empezar a escribir abre una dirección nueva ·
   **↑ ↓** desplazar · **Espacio** página siguiente · **←** o **Retroceso** atrás · **→** adelante. Ratón: clic en enlaces (la barra de estado
   muestra a dónde van), clic/arrastre en la barra de desplazamiento.
 - **Videos:** un enlace a un `.BVC` no se abre como página: COSMOS lo baja (hasta 32 MB) y lo reproduce `PLAY` a pantalla completa;
   al terminar vuelves a la misma página. El hub tiene su lista en `https://TU-HUB/videos` (también en la página de inicio de COSMOS).
-- **No hay (todavía):** JavaScript, imágenes, hojas de estilo externas (`<link rel=stylesheet>`), formularios y scroll horizontal.
+- **Formularios:** clic en un campo de texto (o **Tab** desde la página/barra, que salta al primer campo y luego al siguiente) y se
+  escribe ahí, con borde azul y cursor; **Enter** envía el formulario (como GET: `accion?nombre=valor&...`, igual que un navegador).
+  Las casillas (`checkbox`/`radio`) se marcan con un clic; un `<select>` cambia a la siguiente opción con cada clic; el botón de enviar
+  también funciona. Los `<textarea>` aceptan Enter como salto de línea. Así ya se puede buscar en FrogFind o DuckDuckGo Lite desde la página.
+  Los formularios con `method=post` se mandan como GET (iPXE solo sabe pedir con GET desde COSMOS).
+- **No hay (todavía):** JavaScript, imágenes, hojas de estilo externas (`<link rel=stylesheet>`), POST y scroll horizontal.
   iPXE no entrega las páginas de error del servidor (404...), solo dice que falló.
 - **Imagen:** `COSMOS.BIN` (~110 KB, enlazado a 0x7000000; montón 0x7400000-0x8F00000) va en la partición FAT de `pc-basic-doom.img`,
   `pc-basic-video.img` y `super-basicos.img`, junto a `NET.BIN`. Necesita ~180 MB de RAM por `bosstash` (QEMU: `-m 256 -nic user,model=e1000`).

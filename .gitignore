@@ -42,3 +42,9 @@ tools/mplay/av1/dav1dout/
 tools/mplay/av1/cross.txt
 tools/mplay/av1/*.o
 tools/mplay/av1/av1.elf
+
+# BCC (generados)
+tools/bcc/bcc
+tools/bcc/bccrun
+tools/bcc/*.o
+tools/bcc/*.elf

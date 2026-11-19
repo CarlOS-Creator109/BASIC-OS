@@ -176,6 +176,13 @@ int  kbd_rawin(int op, int *a, int *b);     /* entrada cruda (ver kapi.h) */
 void kbd_inject(u8 c);
 int  kbd_readline(char *buf, int max);
 void kbd_set_blink(u64 cycles);
+#define KB_ES 0
+#define KB_LA 1
+#define KB_US 2
+#define KB_COUNT 3
+void kbd_set_layout(int l);
+int  kbd_get_layout(void);
+const char *kbd_layout_name(int l, int longname);
 
 /* pci.c */
 u32 pci_read32(int bus, int dev, int fn, int off);

@@ -33,6 +33,7 @@ int          plat_cd_play(int track);                         /* 0 = bien, <0 = 
 void         plat_cd_stop(void);
 int          plat_cd_eject(void);
 int          plat_cd_status(int *track, int *secs);           /* 1 = suena */
+int          plat_keyb(const char *arg);                     /* KEYB [ES|LA|US]; <0 = no existe */
 int          plat_exec(const char *name);                     /* ejecuta un modulo de /SYS; <0 = error */
 void         plat_locate(int col, int row);
 void         basic_load_text(const char *text, int n);        /* reemplaza el programa en memoria */

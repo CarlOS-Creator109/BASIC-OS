@@ -33,3 +33,9 @@ Este repo incluye o usa:
 | musl libc (enlazada dentro de `store/MPLAY.BIN` y `store/MPLAYAV1.BIN`) | la del sistema (`musl-gcc`) | MIT |
 | Linux (BZIMAGE) y Tiny Core (INITRD) para BASHTERM/TINYCORE | `tools/linux/` | GPL-2.0 y las de cada paquete |
 | FTTS (motor de voz de `sys/say.c`) y los formantes de espeak-ng (es-419) incrustados en su tabla `OV[]` | `sys/say.c` | codigo de FTTS: del autor; los valores de formantes vienen de espeak-ng (GPL-3.0-or-later), asi que `SAY.APP` se distribuye bajo GPL-3.0-or-later |
+
+BCC (`tools/bcc/`, `store/BCC.BIN`) es codigo propio del proyecto (GPL-2.0-or-later). Su analizador sigue la forma de
+chibicc de Rui Ueyama (MIT), pero no copia su codigo; la biblioteca de C (`tools/bcc/lib/`) tambien es propia.
+Ojo: las partes de esa biblioteca que usa un programa quedan dentro de su `.BIN`, asi que hoy un programa compilado con
+BCC se distribuye bajo la GPL. Si se quiere que la gente pueda usar otra licencia para sus programas, hay que agregar
+una excepcion para la biblioteca (como la "GCC Runtime Library Exception"); todavia no esta puesta.

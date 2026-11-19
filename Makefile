@@ -93,7 +93,7 @@ SYSPATHS := $(foreach f,$(SYSFILES),$(lastword $(subst =, ,$(f))))
 
 # los modulos de /SYS se compilan con -Os: el area /SYS de la imagen es fija (276 sectores) y con -O2 los
 # GCC nuevos (Arch) ya no cabian. La velocidad casi no cambia: el trabajo pesado lo hace el kernel.
-$(SYSDIR)/%.o: $(SYSDIR)/%.c kapi.h mod_head.h $(SYSDIR)/ui.h $(SYSDIR)/wtk.h $(SYSDIR)/binwin.h
+$(SYSDIR)/%.o: $(SYSDIR)/%.c kapi.h mod_head.h $(SYSDIR)/ui.h $(SYSDIR)/wtk.h $(SYSDIR)/binwin.h $(SYSDIR)/fatw.h
 	$(CC) $(filter-out -O2,$(CFLAGS)) -Os -I. -c $< -o $@
 
 $(SYSDIR)/GUI.SYS: $(SYSDIR)/gui.o $(LIBO) mod.ld
@@ -184,6 +184,26 @@ store/$(shell echo $(1) | tr a-z A-Z).BIN: apps/$(1).c kapi.h mod_head.h sys/ui.
 endef
 $(foreach a,$(STOREAPPS),$(eval $(call STOREAPP,$(a))))
 store: $(foreach a,$(STOREAPPS),store/$(shell echo $(a) | tr a-z A-Z).BIN)
+
+# BCC (BASIC-OS COMPILER C): compilador de C que escribe .BIN de la tienda. tools/bcc/bcc es la version de Linux
+#   (bcc hola.c -o HOLA.BIN), tools/bcc/bccrun corre un .BIN en Linux para probar y store/BCC.BIN es el que va
+#   dentro de BASIC-OS. make bcc-test compara la salida de BCC con la de gcc en tools/bcc/tests.
+BCCDIR := tools/bcc
+BCCSRC := $(BCCDIR)/bcc.c $(BCCDIR)/bcc_pp.c $(BCCDIR)/bcc_parse.c $(BCCDIR)/bcc_gen.c $(BCCDIR)/bcclib.h kapi.h
+$(BCCDIR)/bcclib.h: $(BCCDIR)/lib/bcc.h $(BCCDIR)/lib/bcclib.c $(BCCDIR)/mklib.py
+	python3 $(BCCDIR)/mklib.py $(BCCDIR)/lib/bcc.h $(BCCDIR)/lib/bcclib.c > $@
+store/BCC.BIN: $(BCCDIR)/bccos.c $(BCCSRC) sys/fatw.h mod_head.h $(LIBO) mod.ld
+	$(CC) $(CFLAGS) -w -I. -I$(BCCDIR) -c $(BCCDIR)/bccos.c -o $(BCCDIR)/bccos.o
+	$(MODLD) --defsym=MODBASE=0x9000000 $(BCCDIR)/bccos.o $(LIBO) -o $(BCCDIR)/bccos.elf
+	objcopy -O binary $(BCCDIR)/bccos.elf $@
+$(BCCDIR)/bcc: $(BCCDIR)/bcc_host.c $(BCCSRC)
+	cc -O2 -Wall -Wno-unused-function -I. -o $@ $<
+$(BCCDIR)/bccrun: $(BCCDIR)/bccrun.c kapi.h
+	cc -O2 -Wall -I. -o $@ $<
+bcc: store/BCC.BIN $(BCCDIR)/bcc $(BCCDIR)/bccrun
+bcc-test: $(BCCDIR)/bcc $(BCCDIR)/bccrun
+	$(BCCDIR)/tests/run.sh
+.PHONY: bcc bcc-test
 
 # MPLAY.BIN: reproductor de video con FFmpeg (paquete opcional de la tienda). La primera vez baja y compila FFmpeg (~5 min).
 # Necesita musl-gcc (Arch: pacman -S musl), nasm y git. Ver tools/mplay/.

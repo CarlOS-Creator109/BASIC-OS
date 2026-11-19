@@ -1,6 +1,7 @@
 /* kbd.c - teclado PS/2 por sondeo (scancode set 1)
  *
- * Distribucion en espanol (ISO, Espana): Shift+2 = ", AltGr+2 = @, ñ, ç, ¿, ¡, tecla < >.
+ * Tres distribuciones: ES (Espana, la de siempre), LA (latinoamericana) y US. Se elige al arrancar
+ * (kbd_choose en kernel.c) o con el comando KEYB, y se guarda en el disco (LBA 514).
  * Los caracteres fuera de ASCII salen con los codigos de CP437, que es lo que dibuja la
  * fuente VGA:  ñ=A4 Ñ=A5  ç=87 Ç=80  ¡=AD  ¿=A8  º=A7  ª=A6  ·=FA  ¬=AA
  *
@@ -12,8 +13,8 @@
 #define K_NTILDE 0xA4   /* ñ */
 #define K_CCEDIL 0x87   /* ç */
 
-/* sin modificador */
-static const u8 map_n[0x57] = {
+/* ===== Espana (ES) ===== */
+static const u8 es_n[0x57] = {
     [0x02] = '1', [0x03] = '2', [0x04] = '3', [0x05] = '4', [0x06] = '5',
     [0x07] = '6', [0x08] = '7', [0x09] = '8', [0x0A] = '9', [0x0B] = '0',
     [0x0C] = '\'', [0x0D] = 0xAD, [0x0E] = '\b', [0x0F] = '\t',
@@ -27,9 +28,7 @@ static const u8 map_n[0x57] = {
     [0x31] = 'n', [0x32] = 'm', [0x33] = ',', [0x34] = '.', [0x35] = '-',
     [0x37] = '*', [0x39] = ' ', [0x56] = '<'
 };
-
-/* con Shift */
-static const u8 map_s[0x57] = {
+static const u8 es_s[0x57] = {
     [0x02] = '!', [0x03] = '"', [0x04] = 0xFA, [0x05] = '$', [0x06] = '%',
     [0x07] = '&', [0x08] = '/', [0x09] = '(', [0x0A] = ')', [0x0B] = '=',
     [0x0C] = '?', [0x0D] = 0xA8, [0x0E] = '\b', [0x0F] = '\t',
@@ -38,12 +37,86 @@ static const u8 map_s[0x57] = {
     [0x33] = ';', [0x34] = ':', [0x35] = '_',
     [0x37] = '*', [0x39] = ' ', [0x56] = '>'
 };
-
-/* con AltGr */
-static const u8 map_g[0x57] = {
+static const u8 es_g[0x57] = {
     [0x02] = '|', [0x03] = '@', [0x04] = '#', [0x05] = '~', [0x07] = 0xAA,
     [0x1A] = '[', [0x1B] = ']', [0x28] = '{', [0x29] = '\\', [0x2B] = '}'
 };
+
+/* ===== Latinoamericano (LA) ===== */
+static const u8 la_n[0x57] = {
+    [0x29] = '|',
+    [0x02] = '1', [0x03] = '2', [0x04] = '3', [0x05] = '4', [0x06] = '5',
+    [0x07] = '6', [0x08] = '7', [0x09] = '8', [0x0A] = '9', [0x0B] = '0',
+    [0x0C] = '\'', [0x0D] = 0xA8, [0x0E] = '\b', [0x0F] = '\t',
+    [0x10] = 'q', [0x11] = 'w', [0x12] = 'e', [0x13] = 'r', [0x14] = 't',
+    [0x15] = 'y', [0x16] = 'u', [0x17] = 'i', [0x18] = 'o', [0x19] = 'p',
+    [0x1A] = '\'', [0x1B] = '+', [0x1C] = '\n',
+    [0x1E] = 'a', [0x1F] = 's', [0x20] = 'd', [0x21] = 'f', [0x22] = 'g',
+    [0x23] = 'h', [0x24] = 'j', [0x25] = 'k', [0x26] = 'l', [0x27] = K_NTILDE,
+    [0x28] = '{', [0x2B] = '}',
+    [0x2C] = 'z', [0x2D] = 'x', [0x2E] = 'c', [0x2F] = 'v', [0x30] = 'b',
+    [0x31] = 'n', [0x32] = 'm', [0x33] = ',', [0x34] = '.', [0x35] = '-',
+    [0x37] = '*', [0x39] = ' ', [0x56] = '<'
+};
+static const u8 la_s[0x57] = {
+    [0x29] = 0xF8,                                      /* ° */
+    [0x02] = '!', [0x03] = '"', [0x04] = '#', [0x05] = '$', [0x06] = '%',
+    [0x07] = '&', [0x08] = '/', [0x09] = '(', [0x0A] = ')', [0x0B] = '=',
+    [0x0C] = '?', [0x0D] = 0xAD, [0x0E] = '\b', [0x0F] = '\t',
+    [0x1A] = '"', [0x1B] = '*', [0x1C] = '\n',
+    [0x28] = '[', [0x2B] = ']',
+    [0x33] = ';', [0x34] = ':', [0x35] = '_',
+    [0x37] = '*', [0x39] = ' ', [0x56] = '>'
+};
+static const u8 la_g[0x57] = {
+    [0x29] = 0xAA, [0x0C] = '\\', [0x10] = '@', [0x1B] = '~', [0x28] = '^', [0x2B] = '`'
+};
+
+/* ===== Estados Unidos (US) ===== */
+static const u8 us_n[0x57] = {
+    [0x29] = '`',
+    [0x02] = '1', [0x03] = '2', [0x04] = '3', [0x05] = '4', [0x06] = '5',
+    [0x07] = '6', [0x08] = '7', [0x09] = '8', [0x0A] = '9', [0x0B] = '0',
+    [0x0C] = '-', [0x0D] = '=', [0x0E] = '\b', [0x0F] = '\t',
+    [0x10] = 'q', [0x11] = 'w', [0x12] = 'e', [0x13] = 'r', [0x14] = 't',
+    [0x15] = 'y', [0x16] = 'u', [0x17] = 'i', [0x18] = 'o', [0x19] = 'p',
+    [0x1A] = '[', [0x1B] = ']', [0x1C] = '\n',
+    [0x1E] = 'a', [0x1F] = 's', [0x20] = 'd', [0x21] = 'f', [0x22] = 'g',
+    [0x23] = 'h', [0x24] = 'j', [0x25] = 'k', [0x26] = 'l', [0x27] = ';',
+    [0x28] = '\'', [0x2B] = '\\',
+    [0x2C] = 'z', [0x2D] = 'x', [0x2E] = 'c', [0x2F] = 'v', [0x30] = 'b',
+    [0x31] = 'n', [0x32] = 'm', [0x33] = ',', [0x34] = '.', [0x35] = '/',
+    [0x37] = '*', [0x39] = ' ', [0x56] = '\\'
+};
+static const u8 us_s[0x57] = {
+    [0x29] = '~',
+    [0x02] = '!', [0x03] = '@', [0x04] = '#', [0x05] = '$', [0x06] = '%',
+    [0x07] = '^', [0x08] = '&', [0x09] = '*', [0x0A] = '(', [0x0B] = ')',
+    [0x0C] = '_', [0x0D] = '+', [0x0E] = '\b', [0x0F] = '\t',
+    [0x1A] = '{', [0x1B] = '}', [0x1C] = '\n',
+    [0x27] = ':', [0x28] = '"', [0x2B] = '|',
+    [0x33] = '<', [0x34] = '>', [0x35] = '?',
+    [0x37] = '*', [0x39] = ' ', [0x56] = '|'
+};
+static const u8 us_g[0x57] = { [0x01] = 0 };
+
+static const u8 *const maps[KB_COUNT][3] = {
+    { es_n, es_s, es_g }, { la_n, la_s, la_g }, { us_n, us_s, us_g }
+};
+static const char *const kb_names[KB_COUNT] = { "ES", "LA", "US" };
+static const char *const kb_long[KB_COUNT] = { "ESPANOL (ESPANA)", "LATINOAMERICANO", "INGLES (ESTADOS UNIDOS)" };
+static int layout;
+#define map_n (maps[layout][0])
+#define map_s (maps[layout][1])
+#define map_g (maps[layout][2])
+
+void kbd_set_layout(int l)  { if (l >= 0 && l < KB_COUNT) layout = l; }
+int  kbd_get_layout(void)   { return layout; }
+const char *kbd_layout_name(int l, int longname)
+{
+    if (l < 0 || l >= KB_COUNT) return "";
+    return longname ? kb_long[l] : kb_names[l];
+}
 
 #define QSIZE 1024
 static u8 queue[QSIZE];

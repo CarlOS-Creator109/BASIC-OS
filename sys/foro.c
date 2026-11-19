@@ -364,29 +364,172 @@ static int ask_nick(void)
     return 1;
 }
 
-/* pide el mensaje (varias lineas; una linea vacia lo termina). Devuelve la longitud, 0 si no hay mensaje o se cancelo. */
-static int ask_message(char *msg)
+/* ---- editor del mensaje (pantalla completa) ----
+ * Lo que pidio Nomura: el texto pasa solo al siguiente renglon (se corta por palabras), Enter hace un
+ * renglon nuevo (se pueden dejar renglones en blanco) y abajo siempre se ve cuanto falta.
+ * TAB = enviar, ESC dos veces = descartar. Las letras con acento del teclado (ñ, ¿, ¡...) se mandan en UTF-8. */
+#define ED_W     76                     /* renglon de la pantalla (el hub parte a 78) */
+#define ED_L     20                     /* renglones */
+#define ED_TOP   3                      /* fila donde empieza el texto */
+static char ed[ED_L][ED_W + 1];
+static int edn[ED_L], edcur;
+static const char *ed_head;
+
+static void putc_(int c) { char t[2]; t[0] = (char)c; t[1] = 0; pr(t); }
+static void ed_goto(int r, int c)
 {
-    char line[78];
-    int len = 0, lines = 0, n;
-    pr("Escribe tu mensaje. Una linea vacia lo termina (ESC = cancelar):\n");
+    int i;
+    putc_(19);                          /* home */
+    for (i = 0; i < r; i++) putc_(17);
+    for (i = 0; i < c; i++) putc_(29);
+}
+
+static int ed_count(void)               /* letras que se van a mandar (los saltos cuentan 1) */
+{
+    int i, n = 0;
+    for (i = 0; i <= edcur; i++) n += edn[i] + (i < edcur);
+    return n;
+}
+
+static void ed_status(const char *msg)
+{
+    char t[24];
+    int n = ed_count(), i = 0, v, d;
+    ed_goto(ED_TOP + ED_L + 1, 0);
+    pr(n > MSG_MAX - 100 ? "\x1c" : "\x1e");             /* rojo cerca del limite, verde si no */
+    t[i++] = '[';
+    for (d = 1000; d; d /= 10) { v = n / d % 10; if (v || d == 1 || i > 1) t[i++] = (char)('0' + v); }
+    t[i++] = '/';
+    t[i++] = '1'; t[i++] = '4'; t[i++] = '0'; t[i++] = '0'; t[i++] = ']'; t[i] = 0;
+    pr(t);
+    pr("\x05");                                          /* blanco */
+    pr(msg ? msg : (n > MSG_MAX - 100 ? "  casi lleno" : "            "));
+    pr("                                        ");
+    ed_goto(ED_TOP + edcur, edn[edcur]);
+}
+
+static void ed_redraw(void)
+{
+    int i, j;
+    putc_(147);
+    pr(ed_head);
+    pr("\n\x9b" "Enter = renglon nuevo   TAB = enviar   ESC = descartar   (el texto pasa solo)\x05\n");
+    for (i = 0; i < ED_W; i++) putc_('-');
+    for (i = 0; i <= edcur; i++) {
+        ed_goto(ED_TOP + i, 0);
+        for (j = 0; j < edn[i]; j++) putc_((unsigned char)ed[i][j]);
+    }
+    ed_goto(ED_TOP + ED_L, 0);
+    for (i = 0; i < ED_W; i++) putc_('-');
+    ed_status(0);
+}
+
+/* la palabra que no cabe se va al renglon siguiente */
+static int ed_wrap(int c)
+{
+    int i, sp = -1, k;
+    if (edcur >= ED_L - 1)
+        return 0;
+    if (c != ' ')
+        for (i = edn[edcur] - 1; i > 0; i--)
+            if (ed[edcur][i] == ' ') { sp = i; break; }
+    edcur++;
+    edn[edcur] = 0;
+    if (sp > 0) {
+        for (k = sp + 1; k < edn[edcur - 1]; k++)
+            ed[edcur][edn[edcur]++] = ed[edcur - 1][k];
+        edn[edcur - 1] = sp;                             /* el espacio se vuelve el salto */
+    }
+    if (c != ' ')
+        ed[edcur][edn[edcur]++] = (char)c;
+    ed_redraw();
+    return 1;
+}
+
+static int is_text_key(int c)
+{
+    return (c >= 32 && c < 127) || c == 0xA4 || c == 0xA5 || c == 0x87 || c == 0x80 || c == 0xAD ||
+           c == 0xA8 || c == 0xA7 || c == 0xA6 || c == 0xFA || c == 0xAA || c == 0xF8;
+}
+
+/* CP437 del teclado -> UTF-8 */
+static int to_utf8(int c, char *o)
+{
+    int u;
+    switch (c) {
+    case 0xA4: u = 0xF1; break; case 0xA5: u = 0xD1; break; case 0x87: u = 0xE7; break; case 0x80: u = 0xC7; break;
+    case 0xAD: u = 0xA1; break; case 0xA8: u = 0xBF; break; case 0xA7: u = 0xBA; break; case 0xA6: u = 0xAA; break;
+    case 0xFA: u = 0xB7; break; case 0xAA: u = 0xAC; break; case 0xF8: u = 0xB0; break;
+    default: o[0] = (char)c; return 1;
+    }
+    o[0] = (char)(0xC0 | (u >> 6));
+    o[1] = (char)(0x80 | (u & 63));
+    return 2;
+}
+
+/* pide el mensaje. Devuelve la longitud en bytes (UTF-8), 0 si no hay mensaje o se cancelo. */
+static int ask_message(char *msg, const char *head)
+{
+    int len = 0, i, j, esc = 0, last;
+    edcur = 0; edn[0] = 0; ed_head = head;
+    K->esc();
+    ed_redraw();
     for (;;) {
-        pr("| ");
-        n = readline(line, sizeof line, 1);
-        if (n < 0)
-            return 0;
-        if (n == 0)
-            break;
-        if (len + n + 1 > MSG_MAX || lines >= 18) {
-            pr("(ya no cabe mas: maximo ~1400 letras)\n");
-            break;
+        int c = K->poll();
+        if (K->esc() || c == 27) {
+            if (esc) { putc_(147); return 0; }
+            esc = 1;
+            ed_status("  ESC otra vez = descartar el mensaje");
+            continue;
         }
-        {   int i;
-            for (i = 0; i < n; i++) msg[len++] = line[i];
-            msg[len++] = '\n'; }
-        lines++;
+        if (!c) { K->sleep(5); continue; }
+        if (esc) { esc = 0; ed_status(0); }
+        if (c >= 'a' && c <= 'z') c -= 32;               /* la consola da MAYUSCULAS sin Shift: aqui al reves */
+        else if (c >= 'A' && c <= 'Z') c += 32;
+        else if (c == 0xA4) c = 0xA5; else if (c == 0xA5) c = 0xA4;
+        else if (c == 0x87) c = 0x80; else if (c == 0x80) c = 0x87;
+        if (c == '\t') {
+            if (ed_count() > 0) break;
+            ed_status("  todavia no escribiste nada");
+            continue;
+        }
+        if (c == '\r' || c == '\n') {
+            if (edcur >= ED_L - 1 || ed_count() >= MSG_MAX) { ed_status("  ya no caben mas renglones"); continue; }
+            edcur++;
+            edn[edcur] = 0;
+            ed_status(0);
+            continue;
+        }
+        if (c == 8 || c == 127 || c == 20) {
+            if (edn[edcur]) {
+                edn[edcur]--;
+                pr("\b \b");
+            } else if (edcur) {
+                edcur--;                                 /* se junta con el renglon de arriba */
+            }
+            ed_status(0);
+            continue;
+        }
+        if (!is_text_key(c))
+            continue;
+        if (ed_count() >= MSG_MAX) { ed_status("  lleno: maximo 1400 letras"); continue; }
+        if (edn[edcur] >= ED_W) {
+            if (!ed_wrap(c)) ed_status("  ya no caben mas renglones");
+            continue;
+        }
+        ed[edcur][edn[edcur]++] = (char)c;
+        putc_(c);
+        ed_status(0);
+    }
+    /* se quitan los renglones vacios del final */
+    last = edcur;
+    while (last > 0 && edn[last] == 0) last--;
+    for (i = 0; i <= last; i++) {
+        for (j = 0; j < edn[i]; j++) len += to_utf8((unsigned char)ed[i][j], msg + len);
+        if (i < last) msg[len++] = '\n';
     }
     msg[len] = 0;
+    putc_(147);
     return len;
 }
 
@@ -449,19 +592,25 @@ static int send_post(const char *hid, const char *title, const char *msg, int ml
 
 static int reply(const char *id)
 {
-    static char msg[MSG_MAX + 8];
+    static char msg[MSG_MAX * 2 + 8];
     char nid[8];
     int n;
     if (!ask_nick())
         return 0;
-    n = ask_message(msg);
+    {   static char head[60];
+        int k = 0;
+        const char *p = "Respuesta al hilo ", *q = id;
+        while (*p) head[k++] = *p++;
+        while (*q && k < 40) head[k++] = *q++;
+        head[k] = 0;
+        n = ask_message(msg, head); }
     if (n <= 0) { pr("(cancelado)\n"); return 0; }
     return send_post(id, "", msg, n, nid);
 }
 
 static int new_thread(void)
 {
-    static char msg[MSG_MAX + 8];
+    static char msg[MSG_MAX * 2 + 8];
     char title[52], nid[8];
     int n;
     if (!ask_nick())
@@ -469,7 +618,7 @@ static int new_thread(void)
     pr("Titulo del hilo (3 a 50 letras): ");
     n = readline(title, sizeof title, 1);
     if (n < 3) { pr("(cancelado)\n"); return 0; }
-    n = ask_message(msg);
+    n = ask_message(msg, "Hilo nuevo");
     if (n <= 0) { pr("(cancelado)\n"); return 0; }
     return send_post("NEW", title, msg, n, nid);
 }

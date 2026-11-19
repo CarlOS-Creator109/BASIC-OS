@@ -157,8 +157,8 @@ static int cp437(int c)
     case 0x2193: return 0x19;
     case 0x25B6: case 0x25BA: return 0x10;
     case 0x25C0: case 0x25C4: return 0x11;
-    case 0x25B2: return 0x1E;
-    case 0x25BC: return 0x1F;
+    case 0x25B2: case 0x25B4: return 0x1E;
+    case 0x25BC: case 0x25BE: return 0x1F;
     case 0x2713: case 0x2714: case 0x221A: return 0xFB;
     case 0x00D7: case 0x2715: case 0x2716: return 'x';
     case 0x20AC: return 'E';
@@ -352,6 +352,11 @@ static int addr_focus = 1, addr_fresh;
 static char status[200], hover[URLMAX];
 static unsigned load_ms;
 
+/* ---- formularios: el campo con el foco se edita aqui y se guarda en su atributo value ---- */
+#define FMAX 1024
+static Node *fnode;                          /* campo de texto con el foco (0 = ninguno) */
+static char fbuf[FMAX];                      /* su texto en UTF-8 */
+static int flen;
 static int vh(void) { int h = WH - TOPH - STATH; return h < 1 ? 1 : h; }
 static int vw(void) { int w = WW - SBW; return w < 40 ? 40 : w; }
 static int maxscroll(void) { int m = pg.height - vh(); return m < 0 ? 0 : m; }
@@ -415,6 +420,64 @@ static void draw_status(void)
     noclip();
 }
 
+static int is_area(Node *n) { return n && !strcmp(n->name, "textarea"); }
+
+/* el rectangulo del control en la pagina (el primer IT_RECT con su nodo) */
+static Item *ctrl_rect(Node *n)
+{
+    int i;
+    for (i = 0; i < pg.n; i++)
+        if (pg.it[i].kind == IT_RECT && pg.it[i].nd == n)
+            return &pg.it[i];
+    return 0;
+}
+
+/* pinta encima del campo lo que se va escribiendo, con el cursor */
+static void draw_field(int top)
+{
+    Item *r = ctrl_rect(fnode);
+    int sy, cw = 8, ch = 16, cols, rows, n = 0, i, x;
+    const char *p, *e;
+    int cps[FMAX];
+    if (!r)
+        return;
+    sy = r->y - scroll + top;
+    rect(r->x, sy, r->w, r->h, C_BLUE);              /* borde azul: aqui va lo que escribes */
+    rect(r->x + 2, sy + 2, r->w - 4, r->h - 4, C_WHITE);
+    cols = (r->w - 8) / cw; if (cols < 1) cols = 1;
+    rows = is_area(fnode) ? (r->h - 4) / ch : 1; if (rows < 1) rows = 1;
+    p = fbuf; e = fbuf + flen;
+    while (p < e && n < FMAX)
+        cps[n++] = utf8_next(&p, e);
+    if (rows == 1) {                                 /* una linea: se ve el final */
+        int from = n > cols - 1 ? n - (cols - 1) : 0;
+        int ty = sy + (r->h - ch) / 2;
+        for (i = from, x = r->x + 4; i < n; i++, x += cw)
+            glyph(x, ty, cp437(cps[i]), 1, C_BLACK, 0);
+        rect(x, ty, 2, ch, C_BLUE);
+        return;
+    }
+    {   /* varias lineas (textarea): se parte por columnas y saltos, se ven las ultimas */
+        int lines = 1, cx = 0, line = 0, first;
+        for (i = 0; i < n; i++) {
+            if (cps[i] == '\n' || cx >= cols) { lines++; cx = 0; if (cps[i] == '\n') continue; }
+            cx++;
+        }
+        first = lines > rows ? lines - rows : 0;
+        cx = 0;
+        for (i = 0; i <= n; i++) {
+            int c = i < n ? cps[i] : -1;
+            if (c == '\n' || cx >= cols) { line++; cx = 0; if (c == '\n') continue; }
+            if (line >= first) {
+                int gx = r->x + 4 + cx * cw, gy = sy + 3 + (line - first) * ch;
+                if (c < 0) rect(gx, gy, 2, ch, C_BLUE);
+                else glyph(gx, gy, cp437(c), 1, C_BLACK, 0);
+            }
+            cx++;
+        }
+    }
+}
+
 static void draw_page(void)
 {
     int top = TOPH, h = vh(), w = vw(), i;
@@ -451,6 +514,8 @@ static void draw_page(void)
         }
         }
     }
+    if (fnode)
+        draw_field(top);
     if (busy || pending) {                       /* aviso de carga encima de la pagina */
         int bw = 8 * 14;
         rect(w / 2 - bw / 2 - 6, top + h / 2 - 14, bw + 12, 28, C_BLUE);
@@ -720,6 +785,7 @@ static void set_page(const char *src, long n, const char *url)
     mm_heap_reset();
     memset(&pg, 0, sizeof pg);
     doc = 0;
+    fnode = 0;
     scroll = 0;
     while (p < src + n && (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t'))
         p++;
@@ -1010,6 +1076,290 @@ static void follow(const char *href)
     navigate(abs, 1);
 }
 
+static void do_key_scroll(int k)
+{
+    scroll += k == KEY_DOWN ? 48 : -48;
+    clamp_scroll();
+    redraw();
+}
+
+/* ================= formularios ================= */
+static const char *ntype(Node *n)
+{
+    const char *t;
+    if (!strcmp(n->name, "input")) { t = node_attr(n, "type"); return t ? t : "text"; }
+    if (!strcmp(n->name, "button")) { t = node_attr(n, "type"); return t ? t : "submit"; }
+    return n->name;                               /* textarea, select */
+}
+static int is_textish(Node *n)
+{
+    const char *t;
+    if (!n || n->type) return 0;
+    if (is_area(n)) return 1;
+    if (strcmp(n->name, "input")) return 0;
+    t = ntype(n);
+    return !strcasecmp(t, "text") || !strcasecmp(t, "search") || !strcasecmp(t, "email") || !strcasecmp(t, "url") ||
+           !strcasecmp(t, "password") || !strcasecmp(t, "number") || !strcasecmp(t, "tel");
+}
+static int is_ctrl(Node *n)
+{
+    return n && !n->type && (!strcmp(n->name, "input") || !strcmp(n->name, "button") ||
+                             !strcmp(n->name, "textarea") || !strcmp(n->name, "select"));
+}
+
+static void set_attr(Node *n, const char *name, const char *val)
+{
+    int i;
+    Attr *na;
+    for (i = 0; i < n->nattrs; i++)
+        if (!strcmp(n->attrs[i].name, name)) { n->attrs[i].val = val ? strdup(val) : 0; if (!val) n->attrs[i].name = "-"; return; }
+    if (!val)
+        return;
+    na = malloc((size_t)(n->nattrs + 1) * sizeof(Attr));
+    if (!na)
+        return;
+    for (i = 0; i < n->nattrs; i++) na[i] = n->attrs[i];
+    na[i].name = strdup(name);
+    na[i].val = strdup(val);
+    n->attrs = na;
+    n->nattrs++;
+}
+
+/* control bajo el raton (coordenadas de pagina) */
+static Node *ctrl_at(int x, int y)
+{
+    int i;
+    for (i = pg.n - 1; i >= 0; i--) {
+        Item *t = &pg.it[i];
+        if (t->kind == IT_RECT && is_ctrl(t->nd) && x >= t->x && x < t->x + t->w && y >= t->y && y < t->y + t->h)
+            return t->nd;
+    }
+    return 0;
+}
+
+static void relayout(void)
+{
+    layout_doc(doc, &pg, vw(), 1.0f, 0);
+    clamp_scroll();
+}
+
+/* lo escrito pasa al atributo value del nodo (y se vuelve a acomodar la pagina) */
+static void commit_field(int lay)
+{
+    if (!fnode)
+        return;
+    fbuf[flen] = 0;
+    set_attr(fnode, "value", fbuf);
+    fnode = 0;
+    if (lay)
+        relayout();
+}
+
+static void focus_field(Node *n)
+{
+    const char *v = node_attr(n, "value");
+    commit_field(1);
+    fnode = n;
+    flen = 0;
+    if (v) { while (v[flen] && flen < FMAX - 8) { fbuf[flen] = v[flen]; flen++; } }
+    fbuf[flen] = 0;
+    addr_focus = 0;
+    scopy(status, "Escribe; Enter = enviar el formulario, TAB = siguiente campo", sizeof status);
+}
+
+static Node *form_of(Node *n)
+{
+    for (; n; n = n->parent)
+        if (!n->type && n->name && !strcmp(n->name, "form"))
+            return n;
+    return 0;
+}
+
+static void q_add(char *o, int *k, int max, const char *s, int n)
+{
+    int i;
+    for (i = 0; i < n && *k < max - 4; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == ' ') o[(*k)++] = '+';
+        else if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '*') o[(*k)++] = (char)c;
+        else { o[(*k)++] = '%'; o[(*k)++] = "0123456789ABCDEF"[c >> 4]; o[(*k)++] = "0123456789ABCDEF"[c & 15]; }
+    }
+    o[*k] = 0;
+}
+static void q_pair(char *o, int *k, int max, const char *name, const char *val)
+{
+    if (*k > 0 && o[*k - 1] != '?') { if (*k < max - 2) o[(*k)++] = '&'; }
+    q_add(o, k, max, name, (int)strlen(name));
+    if (*k < max - 2) o[(*k)++] = '=';
+    q_add(o, k, max, val, (int)strlen(val));
+}
+
+/* recorre el formulario y arma nombre=valor (como lo haria un navegador con GET) */
+static void q_walk(Node *n, Node *btn, char *o, int *k, int max)
+{
+    Node *ch;
+    for (ch = n->first; ch; ch = ch->next) {
+        const char *nm, *t;
+        if (ch->type) continue;
+        nm = node_attr(ch, "name");
+        if (is_ctrl(ch) && nm && *nm && !node_attr(ch, "disabled")) {
+            t = ntype(ch);
+            if (!strcmp(ch->name, "select")) {
+                Node *op, *sel = 0, *first = 0;
+                for (op = ch->first; op; op = op->next)
+                    if (!op->type && !strcmp(op->name, "option")) { if (!first) first = op; if (node_attr(op, "selected")) sel = op; }
+                if (!sel) sel = first;
+                if (sel) {
+                    const char *v = node_attr(sel, "value");
+                    char buf[200]; int len = 0;
+                    if (!v) { Node *tx; for (tx = sel->first; tx; tx = tx->next) if (tx->type == 1 && len + tx->tlen < 199) { memcpy(buf + len, tx->text, (size_t)tx->tlen); len += tx->tlen; } buf[len] = 0; v = buf; }
+                    q_pair(o, k, max, nm, v);
+                }
+            } else if (!strcasecmp(t, "checkbox") || !strcasecmp(t, "radio")) {
+                if (node_attr(ch, "checked")) { const char *v = node_attr(ch, "value"); q_pair(o, k, max, nm, v ? v : "on"); }
+            } else if (!strcasecmp(t, "submit") || !strcasecmp(t, "image")) {
+                if (ch == btn) { const char *v = node_attr(ch, "value"); q_pair(o, k, max, nm, v ? v : ""); }
+            } else if (strcasecmp(t, "button") && strcasecmp(t, "reset") && strcasecmp(t, "file")) {
+                const char *v = node_attr(ch, "value");
+                q_pair(o, k, max, nm, v ? v : "");
+            }
+        }
+        if (strcmp(ch->name, "select"))
+            q_walk(ch, btn, o, k, max);
+    }
+}
+
+static void submit(Node *form, Node *btn)
+{
+    static char url[URLMAX * 2], act[URLMAX * 2];
+    const char *a, *m, *base = doc && doc->base ? doc->base : cur;
+    int k;
+    commit_field(0);
+    if (!form)
+        return;
+    a = btn && node_attr(btn, "formaction") ? node_attr(btn, "formaction") : node_attr(form, "action");
+    m = node_attr(form, "method");
+    if (a && *a) url_resolve(base, a, act, sizeof act);
+    else scopy(act, cur, sizeof act);
+    act[strcspn(act, "?#")] = 0;                  /* con GET la consulta se reemplaza */
+    k = (int)strlen(act);
+    memcpy(url, act, (size_t)k);
+    url[k++] = '?';
+    url[k] = 0;
+    q_walk(form, btn, url, &k, URLMAX - 8);
+    if (k > 0 && url[k - 1] == '?') url[--k] = 0;
+    if (m && !strcasecmp(m, "post"))
+        scopy(status, "(este formulario pide POST; COSMOS lo manda como GET)", sizeof status);
+    navigate(url, 1);
+}
+
+/* TAB: siguiente campo de texto de la pagina */
+static void next_field(void)
+{
+    int i, start = 0;
+    Node *cur_f = fnode;
+    if (cur_f)
+        for (i = 0; i < pg.n; i++) if (pg.it[i].kind == IT_RECT && pg.it[i].nd == cur_f) { start = i + 1; break; }
+    for (i = 0; i < pg.n; i++) {
+        Item *t = &pg.it[(start + i) % pg.n];
+        if (t->kind == IT_RECT && is_textish(t->nd) && t->nd != cur_f) {
+            focus_field(t->nd);
+            t = ctrl_rect(fnode);
+            if (t && (t->y < scroll || t->y + t->h > scroll + vh())) { scroll = t->y - vh() / 3; clamp_scroll(); }
+            redraw();
+            return;
+        }
+    }
+    if (cur_f) { commit_field(1); redraw(); }
+}
+
+/* teclas mientras un campo tiene el foco */
+static void field_key(int k)
+{
+    if (k == 13 || k == 10) {
+        if (is_area(fnode)) { if (flen < FMAX - 2) fbuf[flen++] = '\n'; }
+        else { submit(form_of(fnode), 0); return; }
+    } else if (k == 9) {
+        next_field();
+        return;
+    } else if (k == 8 || k == 127) {
+        while (flen > 0 && ((unsigned char)fbuf[flen - 1] & 0xC0) == 0x80) flen--;   /* caracter UTF-8 completo */
+        if (flen > 0) flen--;
+    } else if (k == KEY_UP || k == KEY_DOWN) {
+        commit_field(1);
+        do_key_scroll(k);
+        return;
+    } else if (k >= 32 && k != 127 && !(k >= 128 && k < 160 && k != 0x80 && k != 0x87)) {
+        static const unsigned short back[] = { 0xC7,0xFC,0xE9,0xE2,0xE4,0xE0,0xE5,0xE7,0xEA,0xEB,0xE8,0xEF,0xEE,0xEC,0xC4,0xC5,
+                                              0xC9,0xE6,0xC6,0xF4,0xF6,0xF2,0xFB,0xF9,0xFF,0xD6,0xDC,0xA2,0xA3,0xA5,'P','f',
+                                              0xE1,0xED,0xF3,0xFA,0xF1,0xD1,0xAA,0xBA,0xBF,'-',0xAC,0xBD,0xBC,0xA1,0xAB,0xBB };
+        int cp = k;
+        if (k >= 'A' && k <= 'Z') cp = k + 32;    /* el sistema da MAYUSCULAS sin Shift: aqui al reves */
+        else if (k >= 'a' && k <= 'z') cp = k - 32;
+        else if (k == 0xA4) cp = 0xD1; else if (k == 0xA5) cp = 0xF1;     /* ñ/Ñ tambien al reves */
+        else if (k == 0x87) cp = 0xC7; else if (k == 0x80) cp = 0xE7;
+        else if (k >= 128) cp = k - 128 < (int)(sizeof back / sizeof back[0]) ? back[k - 128] : k == 0xF8 ? 0xB0 : k == 0xFA ? 0xB7 : '?';
+        if (flen < FMAX - 6) flen += utf8_put(fbuf + flen, cp);
+    } else
+        return;
+    redraw();
+}
+
+/* clic en un control de la pagina */
+static void ctrl_click(Node *n)
+{
+    const char *t = ntype(n);
+    if (is_textish(n)) { focus_field(n); redraw(); return; }
+    if (!strcmp(n->name, "select")) {             /* sin menu desplegable: cada clic pasa a la siguiente opcion */
+        Node *op, *sel = 0, *first = 0, *next = 0;
+        int after = 0;
+        for (op = n->first; op; op = op->next) {
+            if (op->type || strcmp(op->name, "option")) continue;
+            if (!first) first = op;
+            if (after && !next) next = op;
+            if (node_attr(op, "selected")) { sel = op; after = 1; }
+        }
+        if (!sel) { sel = first; next = first ? first->next : 0; while (next && (next->type || strcmp(next->name, "option"))) next = next->next; }
+        if (!next) next = first;
+        if (sel) set_attr(sel, "selected", 0);
+        if (next) set_attr(next, "selected", "");
+        commit_field(0);
+        relayout();
+        redraw();
+        return;
+    }
+    if (!strcasecmp(t, "checkbox")) {
+        set_attr(n, "checked", node_attr(n, "checked") ? 0 : "");
+        commit_field(0); relayout(); redraw();
+        return;
+    }
+    if (!strcasecmp(t, "radio")) {
+        Node *f = form_of(n), *stack[64];
+        const char *nm = node_attr(n, "name");
+        int sp = 0;
+        if (f && nm) {                            /* se apagan los demas del mismo grupo */
+            stack[sp++] = f;
+            while (sp) {
+                Node *x = stack[--sp], *c2;
+                for (c2 = x->first; c2; c2 = c2->next) {
+                    if (c2->type) continue;
+                    if (!strcmp(c2->name, "input") && node_attr(c2, "name") && !strcmp(node_attr(c2, "name"), nm))
+                        set_attr(c2, "checked", 0);
+                    if (sp < 64) stack[sp++] = c2;
+                }
+            }
+        }
+        set_attr(n, "checked", "");
+        commit_field(0); relayout(); redraw();
+        return;
+    }
+    if (!strcasecmp(t, "submit") || !strcasecmp(t, "image")) {
+        submit(form_of(n), n);
+        return;
+    }
+    if (!strcasecmp(t, "reset")) { scopy(status, "(Restablecer no hace nada aun)", sizeof status); redraw_status(); }
+}
+
 /* ================= callbacks de la ventana ================= */
 static void back(void) { if (hpos > 0) { hpos--; navigate(hist[hpos], 0); } }
 static void fwd(void) { if (hpos < hn - 1) { hpos++; navigate(hist[hpos], 0); } }
@@ -1041,6 +1391,10 @@ static __attribute__((noinline)) void do_key(struct wctx *c, int k)
     Wc = c;
     if (busy || pending)
         return;
+    if (fnode && !addr_focus) {
+        field_key(k);
+        return;
+    }
     if (addr_focus) {
         n = (int)strlen(addr);
         if (k == 13 || k == 10) {
@@ -1048,7 +1402,7 @@ static __attribute__((noinline)) void do_key(struct wctx *c, int k)
             omnibox(addr);
             return;
         }
-        if (k == 9) { addr_focus = 0; redraw(); return; }
+        if (k == 9) { addr_focus = 0; next_field(); return; }
         if (k == 8) {
             if (addr_fresh) addr[0] = 0, addr_fresh = 0;
             else if (n) addr[n - 1] = 0;
@@ -1072,7 +1426,8 @@ static __attribute__((noinline)) void do_key(struct wctx *c, int k)
     else if (k == ' ') scroll += vh() - 32;
     else if (k == KEY_LEFT || k == 8) { back(); return; }
     else if (k == KEY_RIGHT) { fwd(); return; }
-    else if (k == 13 || k == 10 || k == 9) { addr_focus = 1; addr_fresh = 1; draw_bar(); c->damage(c, 0, 0, WW, TOPH); return; }
+    else if (k == 9) { next_field(); return; }    /* TAB: al primer campo de la pagina (buscadores) */
+    else if (k == 13 || k == 10) { addr_focus = 1; addr_fresh = 1; draw_bar(); c->damage(c, 0, 0, WW, TOPH); return; }
     else if (k > 32 && k != 127) {               /* empezar a escribir = direccion nueva */
         addr_focus = 1;
         addr_fresh = 1;
@@ -1107,13 +1462,23 @@ static __attribute__((noinline)) void do_mouse(struct wctx *c, int x, int y, int
         else if (x < 44) fwd();
         else if (x < 66) { if (cur[0]) navigate(cur, 0); }
         else if (x < 88) navigate("cosmos:home", 1);
-        else if (x >= AX) { addr_focus = 1; addr_fresh = 1; draw_bar(); c->damage(c, 0, 0, WW, TOPH); }
+        else if (x >= AX) { if (fnode) commit_field(1); addr_focus = 1; addr_fresh = 1; redraw(); }
         return;
     }
     if (y >= WH - STATH)
         return;
     {
         Item *it = doc ? page_hit(&pg, x, y - TOPH + scroll) : 0;
+        Node *cn = doc && release ? ctrl_at(x, y - TOPH + scroll) : 0;
+        if (cn) {
+            addr_focus = 0;
+            ctrl_click(cn);
+            return;
+        }
+        if (release && fnode) {                  /* clic fuera del campo: se suelta el foco */
+            commit_field(1);
+            redraw();
+        }
         if (release && it && it->href) {
             if (addr_focus) addr_focus = 0;
             follow(it->href);
@@ -1146,7 +1511,9 @@ static __attribute__((noinline)) void do_resize(struct wctx *c)
     PIX = c->pix; STR = c->stride; WW = c->w; WH = c->h;
     noclip();
     if (doc && !busy) {
-        long old = pg.height ? (long)scroll * 1000 / (pg.height > 1 ? pg.height : 1) : 0;
+        long old = pg.height;
+        commit_field(0);
+        old = pg.height ? (long)scroll * 1000 / (pg.height > 1 ? pg.height : 1) : 0;
         css_viewport_w = vw();
         css_viewport_h = vh();
         doc_style(doc);                          /* @media y vw/vh dependen del ancho */

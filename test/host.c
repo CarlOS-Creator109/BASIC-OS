@@ -36,6 +36,7 @@ void plat_cd_stop(void)                   { printf("[CDSTOP]"); }
 int  plat_cd_eject(void)                  { return -1; }
 int  plat_cd_status(int *t, int *s)       { *t = 0; *s = 0; return 0; }
 int  plat_exec(const char *n)             { (void)n; return -1; }
+int  plat_keyb(const char *a)             { (void)a; return -1; }
 void plat_locate(int c, int r)            { printf("[LOCATE %d,%d]", c, r); }
 void plat_sleep(int ms)                   { printf("[SLEEP %d]", ms); }
 int  plat_gfx_w(void)                     { return 64; }

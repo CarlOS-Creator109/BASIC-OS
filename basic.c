@@ -1645,7 +1645,7 @@ static void st_help(void)
     puts_("SOUND KICK|SNARE,HZ,MS  HIHAT,MS  OFF\n");
     puts_("SOUND DRUMKIT,HZ,KIT(0-3),MS  SNDWAIT\n");
     puts_("CDTOC CDPLAY [N] CDSTOP CDEJECT CDSTAT\n");
-    puts_("DESKTOP  YAAI  BASHTERM  TINYCORE  NET  PKG  FORO  INSTALL  PLAY \"X.BVC\"  SAY \"TEXTO\"  EXEC \"X.APP\"  LOAD \"\" = PONG\n");
+    puts_("DESKTOP  YAAI  BASHTERM  TINYCORE  NET  PKG  FORO  KEYB  INSTALL  PLAY \"X.BVC\"  SAY \"TEXTO\"  EXEC \"X.APP\"  LOAD \"\" = PONG\n");
     puts_("LOCATE COL,ROW  (TEXT CURSOR)\n");
     puts_("UNIX = LS CAT RM CLEAR MAN... (ATAJOS PARA LINUX)\n");
     puts_("PCI = LIST PCI DEVICES\n");
@@ -1904,6 +1904,17 @@ static void exec_statement(void)
         int r = plat_exec("INSTALL.APP");
         if (r < 0)
             exec_fail(r);
+    } else if (kw("KEYB")) {
+        char a[8];
+        int n = 0;
+        skip_ws();
+        while (*tp && *tp != ':' && n < 7)
+            a[n++] = *tp++;
+        while (*tp && *tp != ':')
+            tp++;
+        a[n] = 0;
+        if (plat_keyb(a) < 0)
+            fail("USE KEYB, KEYB ES, KEYB LA O KEYB US");
     } else if (kw("TINYCORE")) {
         int r = plat_exec("TINYCORE.APP");
         if (r < 0)

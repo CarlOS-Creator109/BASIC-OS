@@ -281,6 +281,157 @@ void plat_reboot(void)
         __asm__ volatile("hlt");
 }
 
+/* ---- distribucion del teclado: menu con flechas al arrancar y comando KEYB ----
+ * Se guarda en el LBA 514 de la imagen de arranque (hueco libre entre el directorio de SAVE, 512-513,
+ * y sus datos, 520+). Si el disco no se puede escribir (CD), solo dura hasta apagar. */
+#define KEYB_LBA 514
+static const char keyb_magic[8] = "PCBKEY1";
+
+static int keyb_load(void)
+{
+    u8 sec[512];
+    int i;
+    if (plat_disk_read(KEYB_LBA, sec))
+        return -1;
+    for (i = 0; i < 8; i++)
+        if (sec[i] != (u8)keyb_magic[i])
+            return -1;
+    return sec[8] < KB_COUNT ? sec[8] : -1;
+}
+
+static int keyb_save(int l)
+{
+    u8 sec[512];
+    int i;
+    for (i = 0; i < 512; i++)
+        sec[i] = 0;
+    for (i = 0; i < 8; i++)
+        sec[i] = (u8)keyb_magic[i];
+    sec[8] = (u8)l;
+    return plat_disk_write(KEYB_LBA, sec);
+}
+
+static void keyb_line(int l, int sel)
+{
+    const char *n = kbd_layout_name(l, 1);
+    int k = 0;
+    vga_puts(l == sel ? "  > " : "    ");
+    if (l == sel)
+        vga_putc((char)18);                   /* video inverso */
+    vga_putc(' ');
+    vga_puts(kbd_layout_name(l, 0));
+    vga_puts("  ");
+    vga_puts(n);
+    while (n[k]) k++;
+    for (; k < 24; k++)
+        vga_putc(' ');
+    if (l == sel)
+        vga_putc((char)146);
+    vga_puts("   ");
+}
+
+static void keyb_count(int secs)
+{
+    vga_putc('\r');
+    if (secs > 0) {
+        vga_puts("  ARRANCA SOLO EN ");
+        vga_putc((char)('0' + secs / 10 % 10));
+        vga_putc((char)('0' + secs % 10));
+        vga_puts(" S (CUALQUIER FLECHA LO DETIENE)   ");
+    } else
+        vga_puts("  ENTER = USAR ESTE   ESC = DEJAR EL QUE ESTABA              ");
+}
+
+/* timeout en segundos (0 = esperar). Devuelve la distribucion elegida o -1 si ESC. */
+static int keyb_menu(int sel, int timeout)
+{
+    int l, ticks = timeout * 50, r = -1;
+    vga_puts("\nTECLADO / KEYBOARD   (FLECHAS ARRIBA/ABAJO + ENTER)\n\n");
+    for (l = 0; l < KB_COUNT; l++) {
+        keyb_line(l, sel);
+        vga_putc('\n');
+    }
+    vga_putc('\n');
+    keyb_count(timeout);
+    kbd_esc();
+    for (;;) {
+        int c = kbd_inkey();
+        if (kbd_esc()) { r = -1; break; }
+        if (c == '\n' || c == '\r') { r = sel; break; }
+        if (c == 145 || c == 17 || c == 157 || c == 29) {     /* flechas */
+            if (c == 145 || c == 157) sel = (sel + KB_COUNT - 1) % KB_COUNT;
+            else sel = (sel + 1) % KB_COUNT;
+            ticks = 0;
+            vga_putc('\r');
+            for (l = 0; l < KB_COUNT + 1; l++)
+                vga_putc((char)145);
+            for (l = 0; l < KB_COUNT; l++) {
+                vga_putc('\r');
+                keyb_line(l, sel);
+                vga_putc((char)17);
+            }
+            vga_putc((char)17);
+            keyb_count(0);
+            continue;
+        }
+        if (c)
+            continue;
+        if (timeout && ticks > 0) {
+            delay_ms(20);
+            if (--ticks == 0) { r = sel; break; }
+            if (ticks % 50 == 0)
+                keyb_count(ticks / 50);
+        } else
+            delay_ms(10);
+    }
+    vga_putc('\n');
+    return r;
+}
+
+static void keyb_apply(int l, int save)
+{
+    kbd_set_layout(l);
+    vga_puts("TECLADO: ");
+    vga_puts(kbd_layout_name(l, 1));
+    if (save && keyb_save(l))
+        vga_puts("  (NO SE PUDO GUARDAR EN EL DISCO)");
+    vga_putc('\n');
+}
+
+/* al arrancar: el guardado preseleccionado, 8 segundos para cambiarlo */
+static void keyb_boot(void)
+{
+    int saved = keyb_load(), r;
+    if (saved >= 0)
+        kbd_set_layout(saved);
+    r = keyb_menu(kbd_get_layout(), 8);
+    if (r < 0)
+        r = kbd_get_layout();
+    keyb_apply(r, r != saved);
+    vga_puts("(PARA CAMBIARLO DESPUES: KEYB, KEYB ES, KEYB LA O KEYB US)\n\n");
+}
+
+/* comando KEYB de BASIC: sin argumento abre el menu */
+int plat_keyb(const char *arg)
+{
+    int l, r;
+    while (*arg == ' ') arg++;
+    if (!*arg) {
+        r = keyb_menu(kbd_get_layout(), 0);
+        if (r >= 0)
+            keyb_apply(r, 1);
+        return 0;
+    }
+    for (l = 0; l < KB_COUNT; l++) {
+        const char *n = kbd_layout_name(l, 0);
+        if ((arg[0] & ~32) == n[0] && (arg[1] & ~32) == n[1] && (arg[2] == 0 || arg[2] == ' ')) {
+            keyb_apply(l, 1);
+            return 0;
+        }
+    }
+    return -1;
+}
+
 /* ---- kernel ---- */
 
 void kmain(void)
@@ -303,6 +454,7 @@ void kmain(void)
     }
     delay_ms(300);
     vga_splash_end();
+    keyb_boot();
     basic_banner();
 
     for (;;) {
