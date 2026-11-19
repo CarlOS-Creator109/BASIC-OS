@@ -334,6 +334,11 @@ Guia completa de despliegue y seguridad: [`hub/README.md`](hub/README.md).
 - **Límites del hub:** 1500 letras por mensaje, 60 mensajes por hilo, 500 hilos, un mensaje cada 15 s y 20 por hora por conexión.
   Como la consola solo pinta ASCII, el hub quita los acentos al mandarlo al sistema (en GitHub se guarda el texto original).
 - **Moderar:** borra o edita el archivo del hilo en GitHub; con el webhook el hub lo nota al instante.
+- **Desde Linux (cliente SDL):** `make tools/forosdl` y `tools/forosdl` (usa `https://basic-os.onrender.com`; otro hub: `tools/forosdl https://mi-hub...`).
+  Ventana con la lista de hilos, lectura con rueda del ratón, y escribir con acentos y ñ (`Ctrl+Enter` envía). Necesita SDL2, SDL2_ttf,
+  una fuente monoespaciada y el programa `curl` (Arch: `sudo pacman -S sdl2 sdl2_ttf ttf-dejavu curl`). La clave la busca en
+  `~/BASIC-OS/hub.key`, en `HUB.CFG` o en `BASICOS_HUB_KEY`, o te la pide; tu nombre y la clave se guardan en `~/.config/basicos-foro.cfg`.
+  En GitHub el texto queda con acentos; la consola de BASIC-OS los ve sin acento. Los renglones largos se parten a 78 letras.
 - Variables del hub: `FORO=0` lo apaga, `FORO_PATH` (carpeta, `foro`), `FORO_KEY` (si no, usa `HUB_KEY`), `FORO_OPEN=1`
   (escribir sin clave), `FORO_MIN_GAP` y `FORO_PER_HOUR`.
 

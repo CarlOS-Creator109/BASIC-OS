@@ -44,7 +44,8 @@ Rutas (con varias tiendas, delante va /NOMBRE: /liberty/list, /liberty/get/X, PO
                 Responde "OK NOMBRE bytes sha256" o un error (403 clave, 400 paquete no valido, 413 muy grande).
   POST /refresh webhook de GitHub (solo con WEBHOOK_SECRET): relee el repo ya
   /foro/list    "#FORO 1 n" y una linea por hilo:  ID mensajes fecha ultimo_autor titulo   (los mas recientes primero)
-  /foro/hilo/ID el hilo en texto plano (solo ASCII: sin acentos, para la consola de BASIC-OS)
+  /foro/hilo/ID el hilo en texto plano (solo ASCII: sin acentos, para la consola de BASIC-OS; con ?u=1 en UTF-8 tal cual,
+                para clientes de fuera como tools/forosdl). /foro/list?u=1 igual.
   POST /foro/post  cuerpo "BOSFORO 1\nCLAVE\nAUTOR\nHILO\nTITULO\n" + el mensaje. HILO = el ID de un hilo o NEW (y entonces
                 lleva TITULO). Responde "OK ID" o un error (403 clave, 400 no valido, 409 hilo lleno, 429 muy seguido).
   Moderar: borra o edita el archivo del hilo en GitHub (el webhook o el CACHE_TTL lo recogen).
@@ -57,7 +58,7 @@ Rutas (con varias tiendas, delante va /NOMBRE: /liberty/list, /liberty/get/X, PO
 Un paquete es  <GH_PATH>/NOMBRE.BIN  o  NOMBRE.BAS  (nombre 8.3, el SO solo lee nombres cortos) y, opcionalmente,
 <GH_PATH>/NOMBRE.TXT cuya primera linea es la descripcion.
 """
-import base64, collections, hashlib, hmac, json, os, re, ssl, sys, threading, time, unicodedata, urllib.error, urllib.request
+import base64, collections, textwrap, hashlib, hmac, json, os, re, ssl, sys, threading, time, unicodedata, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_~-]{1,8}\.(BIN|BAS)$", re.I)
@@ -520,7 +521,11 @@ class Forum:
         if not FORO["open"] and (not FORO["key"] or not hmac.compare_digest(key.encode(), FORO["key"].encode())):
             return 403, "ERROR clave equivocada (o el foro esta cerrado)\n"
         nick = re.sub(r"[^A-Za-z0-9_.-]", "_", clean_line(ascii_fold(nick), F_NICK_MAX).replace(" ", "_"))
-        msg = "\n".join(clean_line(l, 78) if l.strip() else "" for l in msg.replace("\r", "").split("\n")).strip("\n")
+        out = []
+        for l in msg.replace("\r", "").split("\n"):        # renglones de hasta 78 letras (la consola de BASIC-OS): se parten, no se cortan
+            l = clean_line(l, F_MSG_MAX)
+            out.extend(textwrap.wrap(l, 78, break_long_words=True, break_on_hyphens=False) or [""])
+        msg = "\n".join(out).strip("\n")
         msg = re.sub(r"\n{3,}", "\n\n", msg)[:F_MSG_MAX]
         msg = "\n".join((" " + l) if l.startswith(("==", "# ")) else l for l in msg.split("\n"))
         if not nick:
@@ -744,6 +749,9 @@ class H(BaseHTTPRequestHandler):
         path = full[5:]
         if path in ("", "/"):
             return self.send(200, "Foro de BASIC-OS: /foro/list, /foro/hilo/ID y POST /foro/post\n", head=head)
+        query = self.path.split("?", 1)[1] if "?" in self.path else ""
+        utf = "u=1" in query.split("&")                 # ?u=1: texto original (UTF-8, con acentos) para clientes de fuera
+        fold = (lambda x: x) if utf else ascii_fold
         th = FORUM.snapshot()
         if not FORUM.ready.is_set():
             return self.send(503, "ERROR el foro todavia no pudo leer GitHub (%s). Reintenta en unos segundos.\n" % (FORUM.error or "arrancando"), head=head)
@@ -751,13 +759,13 @@ class H(BaseHTTPRequestHandler):
             rows = sorted(th.items(), key=lambda kv: (kv[1]["when"], kv[0]), reverse=True)[:F_LIST_MAX]
             lines = ["#FORO 1 %d" % len(rows)]
             for tid, t in rows:
-                lines.append("%s %d %s %s %s" % (tid, t["n"], t["when"][:10], ascii_fold(t["nick"]) or "-", ascii_fold(t["title"])))
+                lines.append("%s %d %s %s %s" % (tid, t["n"], t["when"][:10], fold(t["nick"]) or "-", fold(t["title"])))
             return self.send(200, "\n".join(lines) + "\n", head=head)
         if path.startswith("/hilo/"):
             t = th.get(path[6:])
             if not t:
                 return self.send(404, "no existe\n", head=head)
-            return self.send(200, ascii_fold(t["text"]), head=head)
+            return self.send(200, fold(t["text"]), head=head)
         return self.send(404, "no existe\n", head=head)
 
     def videos_get(self, full, head):

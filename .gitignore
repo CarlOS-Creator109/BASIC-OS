@@ -9,6 +9,9 @@
 DOOM.BIN
 COSMOS.BIN
 tools/mkbashimg
+tools/forosdl
+tools/mkbvc
+tools/bvcplay
 apps/*.o
 apps/*.elf
 # iPXE: se baja y compila con tools/net/build.sh

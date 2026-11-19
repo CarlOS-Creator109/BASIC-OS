@@ -187,6 +187,10 @@ store: $(foreach a,$(STOREAPPS),store/$(shell echo $(a) | tr a-z A-Z).BIN)
 
 # NET.BIN (iPXE con HTTPS): baja iPXE de GitHub y lo compila con los parches de tools/net/overlay (~2 min). Hace falta para PKG.
 # pc-basic-video.img = PC BASIC + FAT16 con un video .BVC:  make pc-basic-video.img VIDEO=salida.bvc   (ver tools/mkbvc.c)
+# cliente del foro para Linux (SDL2 + SDL2_ttf; la red la hace el programa curl): tools/forosdl [https://hub] [clave]
+tools/forosdl: tools/forosdl.c
+	cc -O2 -Wall -Wno-format-truncation -o $@ $< $$(pkg-config --cflags --libs sdl2 SDL2_ttf)
+
 tools/mkbvc: tools/mkbvc.c
 	cc -O2 -o $@ $<
 tools/bvcplay: tools/bvcplay.c
