@@ -40,3 +40,14 @@ entiendo y tambien estoy con eso, por que claro aunque se que puedes tocar el
 codigo para hacerlo tu mismo yo soy el creador y no me puedo quedar de brasos
 crusados, perdon si no es respondido pero bueno, estare escuchando tus
 peticiones mi querido USER.
+== Carlos | 2026-11-19 10:27 UTC
+ah y si, es que todavia COSMOS esta siendo literalmente construido, por eso es
+que no se puede usar todavia correctamente, basicamente es porque crear un
+navegador completo no es cosa facil y menos en un sistema con su propio kernel
+XD, aunque claro estoy trabajando en BCC (el compilador de C, BASIC-OS
+Compiler C) para que se haga mas facil crear programas usando C directo,
+ademas de arreglar cosas como que tecnicamente todo programa corre con
+beneficios a mismo nivel que los nativos del sistema, y el teclado ES-ES es
+porque bueno yo uso esa distribucion pero ya ire arreglando esas cosas, jaja
+me pase media hora redactando esto pero bueno nunca dije que escribir no
+doliera en las manos XD
