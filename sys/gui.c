@@ -13,6 +13,8 @@
  */
 #include "ui.h"
 #include "mod_head.h"
+#include "binwin.h"
+#include "binicon.h"
 
 #define MAXW   10
 #define BD     3                        /* borde de la ventana */
@@ -81,6 +83,16 @@ static const struct item items[] = {
 };
 #define NITEMS ((int)(sizeof items / sizeof items[0]))
 static struct icon icons[NITEMS];
+
+/* programas de la tienda con icono (los .BIN de la carpeta APPS que traen un bloque BICN, ver binicon.h) */
+#define MAXX 12
+struct xitem { char label[16]; char spec[48]; };
+static struct xitem xitems[MAXX];
+static struct icon xicons[MAXX];
+static int nx;
+#define NALL (NITEMS + nx)
+static const struct icon *icon_of(int i) { return i < NITEMS ? &icons[i] : &xicons[i - NITEMS]; }
+static const char *label_of(int i) { return i < NITEMS ? items[i].label : xitems[i - NITEMS].label; }
 
 /* ---- zona sucia ---- */
 
@@ -479,7 +491,7 @@ static void icon_pos(int i, int *x, int *y)
 static void icons_draw(void)
 {
     int i, x, y;
-    for (i = 0; i < NITEMS; i++) {
+    for (i = 0; i < NALL; i++) {
         icon_pos(i, &x, &y);
         if (x >= cl_x1 || x + ICON_W <= cl_x0 || y >= cl_y1 || y + ICON_H <= cl_y0)
             continue;
@@ -487,7 +499,7 @@ static void icons_draw(void)
         d_rect(x, y, ICON_W, 1, C_LGREY);
         d_rect(x, y, 1, ICON_H, C_LGREY);
         {   /* el icono se dibuja con bloques de 3x3, recortado */
-            const struct icon *ic = &icons[i];
+            const struct icon *ic = icon_of(i);
             int bx = x + (ICON_W - 16 * 3) / 2, by = y + 6, a, b;
             if (!ic->ok)
                 d_rect(bx, by, 48, 48, C_GREY);
@@ -501,9 +513,9 @@ static void icons_draw(void)
         }
         {
             int len = 0;
-            while (items[i].label[len])
+            while (label_of(i)[len])
                 len++;
-            d_text(x + ICON_W / 2 - len * 4, y + 6 + 48 + 6, items[i].label, C_WHITE, hover_icon == i ? C_LBLUE : C_BLUE);
+            d_text(x + ICON_W / 2 - len * 4, y + 6 + 48 + 6, label_of(i), C_WHITE, hover_icon == i ? C_LBLUE : C_BLUE);
         }
     }
 }
@@ -686,6 +698,7 @@ static void c_title(struct wctx *c, const char *t)
 }
 
 static void launch(const char *name);
+static void launch_bin(const char *spec);
 static void c_launch(const char *app) { launch(app); }
 static void c_run_basic(const char *line)
 {
@@ -920,6 +933,113 @@ static void launch(const char *name)
         win_new(0, a, name);
 }
 
+/* ---- programas de la tienda (.BIN en 0x9000000) lanzados desde su icono ---- */
+#define BIN_BASE 0x9000000u
+#define BIN_MAX  0x2000000u
+#define BW_ORIG ((struct wapp *)(unsigned long)(BINWIN_ADDR + 24))
+#define BW_PUB  ((struct wapp *)(unsigned long)(BINWIN_ADDR + 24 + 128))
+
+static void bw_stop(struct wctx *c)
+{
+    if (BW_ORIG->stop)
+        BW_ORIG->stop(c);
+    binwin_clear();
+}
+
+static void launch_bin(const char *spec)
+{
+    const char *busy = binwin_busy(0x40000000ull);
+    struct hdr { u32 magic, end, entry, base; } *h = (struct hdr *)(unsigned long)BIN_BASE;
+    char name[16];
+    unsigned total = 0;
+    int n, i, k = 0, r;
+    for (i = 0; spec[i]; i++)                       /* nombre = lo que va despues de la ultima / o : */
+        if (spec[i] == '/' || spec[i] == ':')
+            k = i + 1;
+    for (i = 0; spec[k + i] && i < 15; i++)
+        name[i] = spec[k + i];
+    name[i] = 0;
+    if (busy) {                                     /* ya hay uno abierto: si es el mismo, al frente */
+        for (i = 0; i < MAXW; i++)
+            if (wins[i].used && wins[i].app == BW_PUB) {
+                set_focus(i);
+                return;
+            }
+        return;
+    }
+    n = K->read(spec, (char *)(unsigned long)BIN_BASE, (int)BIN_MAX, &total);
+    if (n < 16 || (unsigned)n != total || h->magic != 0x4D424350u || h->base != BIN_BASE ||
+        h->end > BIN_BASE + BIN_MAX || h->end < BIN_BASE + (unsigned)n || h->entry < BIN_BASE || h->entry >= BIN_BASE + (unsigned)n)
+        return;
+    memset((void *)(unsigned long)(BIN_BASE + (unsigned)n), 0, h->end - (BIN_BASE + (unsigned)n));
+    r = ((int (*)(const struct kapi *))(unsigned long)h->entry)(K);
+    if (r == MOD_WINAPP) {
+        const struct wapp *a = K->wm_take();
+        if (a) {
+            memcpy(BW_ORIG, a, sizeof *a);
+            memcpy(BW_PUB, a, sizeof *a);
+            BW_PUB->stop = bw_stop;
+            for (i = 0; name[i] && i < 15; i++)
+                BINWIN->name[i] = name[i];
+            BINWIN->name[i] = 0;
+            BINWIN->magic = BINWIN_MAGIC;
+            BINWIN->check = ~BINWIN_MAGIC;
+            win_new(0, BW_PUB, name);
+            return;
+        }
+    }
+    K->set_tick(wm_hook);                           /* era de pantalla completa: repintar todo */
+    desk_dirty(0, 0, SW, SH);
+    K->esc();
+}
+
+/* busca los .BIN con icono en la carpeta APPS de los discos (donde los deja PKG) */
+static char scan_dir[24];
+static char scan_names[MAXX][13];
+static int scan_n;
+static void scan_cb(const char *nm, unsigned size, int isdir)
+{
+    int l = slen(nm);
+    (void)size;
+    if (isdir || scan_n >= MAXX || l < 5 || l > 12)
+        return;
+    if ((nm[l - 4] == '.') && (nm[l - 3] == 'B' || nm[l - 3] == 'b') && (nm[l - 2] == 'I' || nm[l - 2] == 'i') &&
+        (nm[l - 1] == 'N' || nm[l - 1] == 'n'))
+        scopy(scan_names[scan_n++], nm, 13);
+}
+
+static void scan_apps(void)
+{
+    static const char *const dirs[] = { "HD0.1:/APPS", "HD1.1:/APPS", "HD2.1:/APPS", "HD0:/APPS", "USB0.1:/APPS", 0 };
+    static char buf[BICN_OFF + sizeof(struct bin_icon)];
+    int d, i, old = nx;
+    nx = 0;
+    scan_n = 0;
+    for (d = 0; dirs[d] && !scan_n; d++) {
+        scopy(scan_dir, dirs[d], (int)sizeof scan_dir);
+        K->dir(scan_dir, scan_cb);
+    }
+    for (i = 0; i < scan_n && nx < MAXX; i++) {
+        struct xitem *x = &xitems[nx];
+        const struct bin_icon *bi = (const struct bin_icon *)(buf + BICN_OFF);
+        unsigned total = 0;
+        int k = 0, j;
+        for (j = 0; scan_dir[j]; j++) x->spec[k++] = scan_dir[j];
+        x->spec[k++] = '/';
+        for (j = 0; scan_names[i][j] && k < 47; j++) x->spec[k++] = scan_names[i][j];
+        x->spec[k] = 0;
+        memset(buf, 0, sizeof buf);
+        if (K->read(x->spec, buf, (int)sizeof buf, &total) < (int)sizeof buf || bi->magic != BICN_MAGIC)
+            continue;
+        for (j = 0; j < 15 && bi->label[j]; j++) x->label[j] = bi->label[j];
+        x->label[j] = 0;
+        icb_parse(&xicons[nx], bi->icb, slen(bi->icb) < BICN_ICB ? slen(bi->icb) : BICN_ICB);
+        nx++;
+    }
+    if (nx != old || nx)
+        desk_dirty(0, 0, SW, SH);
+}
+
 /* ---- terminal en ventana ---- */
 
 static struct win *term_win(void)
@@ -954,6 +1074,7 @@ static void term_run(struct win *w, const char *line)
     w->busy = 0;
     if (w->closing)
         win_close((int)(w - wins));
+    scan_apps();                                    /* PKG pudo haber instalado un programa con icono */
     {   /* lo que corrio en la terminal (PKG con un programa de ventana...) dejo una ventana publicada */
         const struct wapp *a = K->wm_take();
         if (a)
@@ -1106,12 +1227,14 @@ static void wm_mouse(void)
             taskbar_click(mx);
         } else {
             int k, hit = -1, x, y;
-            for (k = 0; k < NITEMS; k++) {
+            for (k = 0; k < NALL; k++) {
                 icon_pos(k, &x, &y);
                 if (inside(mx, my, x, y, ICON_W, ICON_H))
                     hit = k;
             }
-            if (hit >= 0)
+            if (hit >= NITEMS)
+                launch_bin(xitems[hit - NITEMS].spec);
+            else if (hit >= 0)
                 launch(items[hit].app ? items[hit].app : "TERMINAL");
             else
                 set_focus(-1);
@@ -1176,7 +1299,7 @@ static void wm_mouse(void)
     {   /* resaltar el icono bajo el puntero */
         int k, hit = -1, x, y;
         if (win_at(mx, my) < 0 && my < SH - TBAR)
-            for (k = 0; k < NITEMS; k++) {
+            for (k = 0; k < NALL; k++) {
                 icon_pos(k, &x, &y);
                 if (inside(mx, my, x, y, ICON_W, ICON_H))
                     hit = k;
@@ -1306,6 +1429,7 @@ int mod_main(const struct kapi *api)
     memset(desk, 255, slot_sz);
     for (i = 0; i < NITEMS; i++)
         icon_load(&icons[i], items[i].icon);
+    scan_apps();
     bg_init();
     K->mouse(&mx, &my, &mb);
     pmb = mb;

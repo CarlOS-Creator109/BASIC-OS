@@ -37,3 +37,8 @@ tools/mplay/ffmpeg/
 tools/mplay/ffout/
 tools/mplay/*.o
 tools/mplay/mplay.elf
+tools/mplay/av1/dav1d/
+tools/mplay/av1/dav1dout/
+tools/mplay/av1/cross.txt
+tools/mplay/av1/*.o
+tools/mplay/av1/av1.elf

@@ -42,3 +42,20 @@ bos_syscall_entry:
     popfq
     jmp *%rcx
     .section .note.GNU-stack,"",@progbits
+
+/* bos_on_stack(fn, top): llama fn() con la pila en top (una pila grande propia: dav1d y FFmpeg usan bastante y la del
+ * kernel es chica). Vuelve con la pila de antes. */
+    .text
+    .globl bos_on_stack
+bos_on_stack:
+    push %rbp
+    push %rbx
+    mov %rsp, %rbx
+    mov %rsi, %rsp
+    and $-16, %rsp
+    call *%rdi
+    mov %rbx, %rsp
+    pop %rbx
+    pop %rbp
+    ret
+    .section .note.GNU-stack,"",@progbits

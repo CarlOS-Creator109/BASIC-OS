@@ -124,6 +124,7 @@ void *fb_pool(unsigned int *bytes);
 void  fb_dirty(int x, int y, int w, int h);
 void  fb_flush(void);
 void  fb_present(int x, int y, int w, int h);
+int   fb_overlay(int op, int *r);
 void  fb_cursor_show(int show);
 void  fb_cursor_move(int x, int y);
 

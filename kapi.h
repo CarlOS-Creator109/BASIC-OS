@@ -18,7 +18,7 @@
 #ifndef KAPI_H
 #define KAPI_H
 
-#define KAPI_VER 5
+#define KAPI_VER 6
 #define FONT_ADDR 0x6800            /* fuente 8x16: 16 bytes por caracter, 256 caracteres */
 
 /* tipos de SOUND (los usa tambien el kernel) */
@@ -139,6 +139,10 @@ struct kapi {
     int  (*basic_do)(const char *stmt);
     int  (*basic_eval)(const char *expr, int *val);
     int  (*col)(void);                                 /* columna del cursor de texto en la consola actual */
+    /* (ver 6) hueco de video en el escritorio: la app pinta ahi directo en el framebuffer (a todo color) y el compositor
+     * no lo pisa. op 0 = poner (r = x,y,w,h en coordenadas de pantalla logicas; vuelve con el rectangulo en pixeles reales),
+     * op 1 = quitar, op 2 = ya pinte (redibuja el cursor encima). Solo una a la vez; quitalo al perder el foco. */
+    int  (*overlay)(int op, int *r);
 };
 
 /* codigos de retorno de mod_main */

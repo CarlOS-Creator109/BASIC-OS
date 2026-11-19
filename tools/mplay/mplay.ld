@@ -3,7 +3,7 @@ ENTRY(mod_main)
 SECTIONS
 {
     . = MODBASE;
-    .header : { KEEP(*(.header)) }
+    .header : { KEEP(*(.header)) KEEP(*(.header.icon)) }
     .text   : { *(.text) *(.text.*) }
     .rodata : ALIGN(64) { *(.rodata) *(.rodata.*) }
     .preinit_array : ALIGN(8) { __preinit_array_start = .; KEEP(*(.preinit_array)) __preinit_array_end = .; }

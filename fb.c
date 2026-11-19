@@ -24,6 +24,7 @@ static int lw, lh, opened;
 static struct vgeom g;
 static int dx0, dy0, dx1, dy1;          /* union de lo cambiado; dx1 <= dx0 = nada */
 static int cur_x, cur_y, cur_on;
+static int hx0, hy0, hx1, hy1;          /* hueco de video (coordenadas logicas): el compositor no pinta ahi; hx1 <= hx0 = no hay */
 static u32 pool_ptr, pool_end;
 static u32 rowbuf[3200 * 3 + 16];       /* una fila de pantalla en pixeles reales */
 
@@ -85,6 +86,7 @@ int fb_open(void)
 
 void fb_close(void)
 {
+    hx0 = hy0 = hx1 = hy1 = 0;
     opened = 0;
     cur_on = 0;
 }
@@ -175,25 +177,80 @@ void fb_present(int x, int y, int w, int h)
                     *o++ = v;
             }
         }
-        for (l = 0; l < sc; l++) {
-            volatile u8 *p = g.fb + (u32)(g.y0 + j * sc + l) * g.pitch + (u32)(g.x0 + x * sc) * bytes;
-            int n = w * sc;
-            if (g.bpp == 32) {
-                memcpy((void *)p, rowbuf, (size_t)n * 4);
-            } else if (g.bpp == 24) {
-                for (k = 0; k < n; k++, p += 3) {
-                    p[0] = (u8)rowbuf[k];
-                    p[1] = (u8)(rowbuf[k] >> 8);
-                    p[2] = (u8)(rowbuf[k] >> 16);
+        {   /* si la fila cruza el hueco de video, se escriben solo los trozos de los lados */
+            int seg0[2], seg1[2] = { 0, 0 }, ns = 1, s;
+            seg0[0] = x; seg0[1] = x + w;
+            if (hx1 > hx0 && j >= hy0 && j < hy1 && x < hx1 && x + w > hx0) {
+                ns = 0;
+                if (x < hx0) { seg0[0] = x; seg0[1] = hx0; ns = 1; }
+                if (x + w > hx1) { if (ns) { seg1[0] = hx1; seg1[1] = x + w; ns = 2; } else { seg0[0] = hx1; seg0[1] = x + w; ns = 1; } }
+            }
+            for (s = 0; s < ns; s++) {
+                int a = s ? seg1[0] : seg0[0], b = s ? seg1[1] : seg0[1];
+                const u32 *src = rowbuf + (a - x) * sc;
+                for (l = 0; l < sc; l++) {
+                    volatile u8 *p = g.fb + (u32)(g.y0 + j * sc + l) * g.pitch + (u32)(g.x0 + a * sc) * bytes;
+                    int n = (b - a) * sc;
+                    if (g.bpp == 32) {
+                        memcpy((void *)p, src, (size_t)n * 4);
+                    } else if (g.bpp == 24) {
+                        for (k = 0; k < n; k++, p += 3) {
+                            p[0] = (u8)src[k];
+                            p[1] = (u8)(src[k] >> 8);
+                            p[2] = (u8)(src[k] >> 16);
+                        }
+                    } else {
+                        for (k = 0; k < n; k++, p += 2)
+                            *(volatile u16 *)p = (u16)src[k];
+                    }
                 }
-            } else {
-                for (k = 0; k < n; k++, p += 2)
-                    *(volatile u16 *)p = (u16)rowbuf[k];
             }
         }
     }
     if (cur_on && x < cur_x + CUR_W && x + w > cur_x && y < cur_y + CUR_H && y + h > cur_y)
         draw_cursor();
+}
+
+/* hueco de video (K->overlay): una app (MPLAY) pinta ahi directo en el framebuffer a todo color y el compositor no lo toca.
+ *   op 0 = poner el hueco r[0..3] = x,y,w,h logicos; devuelve en r los pixeles reales (x,y,w,h) y 1
+ *   op 1 = quitarlo (se repinta lo que haya debajo)       op 2 = ya pinte un cuadro: volver a dibujar el cursor encima */
+int fb_overlay(int op, int *r)
+{
+    if (!opened)
+        return 0;
+    if (op == 0) {
+        int x = r[0], y = r[1], w = r[2], h = r[3];
+        if (x < 0) { w += x; x = 0; }
+        if (y < 0) { h += y; y = 0; }
+        if (x + w > lw) w = lw - x;
+        if (y + h > lh) h = lh - y;
+        if (w <= 0 || h <= 0) {
+            fb_overlay(1, 0);
+            return 0;
+        }
+        if (hx1 > hx0 && (hx0 != x || hy0 != y || hx1 != x + w || hy1 != y + h)) {
+            int ox = hx0, oy = hy0, ow = hx1 - hx0, oh = hy1 - hy0;
+            hx0 = hx1 = 0;
+            fb_present(ox, oy, ow, oh);          /* lo que deja de estar tapado */
+        }
+        hx0 = x; hy0 = y; hx1 = x + w; hy1 = y + h;
+        r[0] = g.x0 + x * g.scale; r[1] = g.y0 + y * g.scale; r[2] = w * g.scale; r[3] = h * g.scale;
+        return 1;
+    }
+    if (op == 1) {
+        if (hx1 > hx0) {
+            int ox = hx0, oy = hy0, ow = hx1 - hx0, oh = hy1 - hy0;
+            hx0 = hy0 = hx1 = hy1 = 0;
+            fb_present(ox, oy, ow, oh);
+        }
+        return 0;
+    }
+    if (op == 2) {
+        if (cur_on && hx1 > hx0 && hx0 < cur_x + CUR_W && hx1 > cur_x && hy0 < cur_y + CUR_H && hy1 > cur_y)
+            draw_cursor();
+        return 0;
+    }
+    return 0;
 }
 
 void fb_dirty(int x, int y, int w, int h)

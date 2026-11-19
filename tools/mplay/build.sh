@@ -42,4 +42,5 @@ if readelf -S mplay.elf | grep -q '\.tdata\|\.tbss'; then
 fi
 objcopy -O binary mplay.elf "$TOP/store/MPLAY.BIN"
 END=$(nm mplay.elf | awk '/ __mod_end$/ {print $1}')
-echo "store/MPLAY.BIN: $(stat -c %s "$TOP/store/MPLAY.BIN") bytes, termina en 0x$END (limite 0xb000000)"
+echo "store/MPLAY.BIN: $(stat -c %s "$TOP/store/MPLAY.BIN") bytes, termina en 0x$END (limite 0xaa00000, donde van los plugins)"
+[ $((0x$END)) -le $((0xAA00000)) ] || { echo "ERROR: MPLAY pisa la zona de los plugins"; exit 1; }

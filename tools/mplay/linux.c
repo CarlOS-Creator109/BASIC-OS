@@ -196,7 +196,8 @@ long bos_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
         return 0; }
     case 60: case 231:                                      /* exit, exit_group */
         bos_exit_code = (int)a1;
-        longjmp(bos_exit_jb, 1);
+        longjmp(bos_exit_jb, 1);                            /* (si ya volvimos a mod_main, ese contexto ya no existe:
+                                                               los programas residentes no deben llamar a exit) */
     }
     if (nr >= 0 && nr < 512 && !warned[nr]) {
         char b[64];
@@ -218,11 +219,21 @@ long bos_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
 extern int __libc_start_main(int (*main)(int, char **, char **), int argc, char **argv,
                              void (*i)(void), void (*f)(void), void (*l)(void));
 
-int bos_linux_run(const struct kapi *k, uint64_t lo, uint64_t hi, int (*main_fn)(int, char **, char **))
+static void msr_on(void)
+{
+    wrmsr(MSR_STAR, (old_star & 0xFFFFFFFFull) | (0x08ull << 32) | (0x08ull << 48));   /* CS 0x08, SS 0x10: los del kernel */
+    wrmsr(MSR_LSTAR, (uint64_t)(uintptr_t)bos_syscall_entry);
+    wrmsr(MSR_FMASK, 0x400);                                /* DF a cero al entrar */
+    wrmsr(MSR_EFER, old_efer | 1);                          /* SCE: la instruccion SYSCALL existe */
+}
+
+/* arranca musl y llama a main_fn. Devuelve 1 si main_fn llamo a bos_resident() (el programa sigue vivo: ventana)
+ * o 0 si termino (exit o return); en ese caso todo queda como estaba. */
+int bos_linux_start(const struct kapi *k, uint64_t lo, uint64_t hi, int (*main_fn)(int, char **, char **))
 {
     static char *vec[16];
     static unsigned char random16[16];
-    int i;
+    int i, r;
     K = k;
     heap_lo = (lo + PG - 1) & ~(PG - 1);
     heap_hi = hi & ~(PG - 1);
@@ -235,26 +246,47 @@ int bos_linux_run(const struct kapi *k, uint64_t lo, uint64_t hi, int (*main_fn)
 
     old_efer = rdmsr(MSR_EFER); old_star = rdmsr(MSR_STAR); old_lstar = rdmsr(MSR_LSTAR);
     old_fmask = rdmsr(MSR_FMASK); old_fs = rdmsr(MSR_FSBASE);
-    wrmsr(MSR_STAR, (old_star & 0xFFFFFFFFull) | (0x08ull << 32) | (0x08ull << 48));   /* CS 0x08, SS 0x10: los del kernel */
-    wrmsr(MSR_LSTAR, (uint64_t)(uintptr_t)bos_syscall_entry);
-    wrmsr(MSR_FMASK, 0x400);                                /* DF a cero al entrar */
-    wrmsr(MSR_EFER, old_efer | 1);                          /* SCE: la instruccion SYSCALL existe */
+    msr_on();
     bos_sse_on();
 
-    /* argv, envp vacio y el vector auxiliar que lee musl */
     vec[0] = (char *)"mplay"; vec[1] = 0;                   /* argv */
     vec[2] = 0;                                             /* envp */
     vec[3] = (char *)6;  vec[4] = (char *)4096;             /* AT_PAGESZ */
     vec[5] = (char *)25; vec[6] = (char *)random16;         /* AT_RANDOM */
     vec[7] = (char *)0;  vec[8] = 0;                        /* AT_NULL */
 
-    if (!setjmp(bos_exit_jb))
+    r = setjmp(bos_exit_jb);
+    if (!r)
         __libc_start_main(main_fn, 1, vec, 0, 0, 0);
+    if (r == 2)
+        return 1;                                           /* sigue vivo */
+    bos_linux_stop();
+    return 0;
+}
 
+void bos_resident(void) { longjmp(bos_exit_jb, 2); }
+
+/* al entrar desde el escritorio (callbacks de la ventana): FS, SSE y SYSCALL como los quiere musl */
+void bos_enter(void)
+{
+    msr_on();
+    bos_after_kernel();
+}
+
+void bos_linux_stop(void)
+{
     wrmsr(MSR_FSBASE, old_fs);
     wrmsr(MSR_EFER, old_efer);
     wrmsr(MSR_LSTAR, old_lstar);
     wrmsr(MSR_STAR, old_star);
     wrmsr(MSR_FMASK, old_fmask);
+}
+
+int bos_linux_run(const struct kapi *k, uint64_t lo, uint64_t hi, int (*main_fn)(int, char **, char **))
+{
+    if (bos_linux_start(k, lo, hi, main_fn)) {              /* no deberia quedarse vivo: se apaga igual */
+        bos_linux_stop();
+        return 0;
+    }
     return bos_exit_code;
 }

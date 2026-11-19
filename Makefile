@@ -189,7 +189,10 @@ store: $(foreach a,$(STOREAPPS),store/$(shell echo $(a) | tr a-z A-Z).BIN)
 # Necesita musl-gcc (Arch: pacman -S musl), nasm y git. Ver tools/mplay/.
 mplay:
 	tools/mplay/build.sh
-.PHONY: mplay
+# MPLAYAV1.BIN: plugin AV1 de MPLAY (dav1d). Necesita ademas meson y ninja.
+mplayav1:
+	tools/mplay/av1/build.sh
+.PHONY: mplay mplayav1
 
 # NET.BIN (iPXE con HTTPS): baja iPXE de GitHub y lo compila con los parches de tools/net/overlay (~2 min). Hace falta para PKG.
 # pc-basic-video.img = PC BASIC + FAT16 con un video .BVC:  make pc-basic-video.img VIDEO=salida.bvc   (ver tools/mkbvc.c)

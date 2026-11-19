@@ -3,7 +3,7 @@ ENTRY(mod_main)
 SECTIONS
 {
     . = MODBASE;
-    .header : { KEEP(*(.header)) }
+    .header : { KEEP(*(.header)) KEEP(*(.header.icon)) }
     .text   : { *(.text) *(.text.*) }
     .rodata : ALIGN(4) { *(.rodata) *(.rodata.*) }
     .data   : ALIGN(4) { *(.data) *(.data.*) }

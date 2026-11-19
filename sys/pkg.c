@@ -848,6 +848,10 @@ static int launch(const char *name, u32 n)
         bas_loaded = 1;
         return 1;
     }
+    if (n >= sizeof *h && h->magic == 0x4D424350u && h->base > APP_BASE && h->base < APP_BASE + APP_MAX) {
+        pr("(PKG) "); pr(name); pr(" es un complemento (plugin) de otro programa: ya quedo guardado en el disco y ese programa lo usa solo.\n");
+        return 1;
+    }
     if (n < sizeof *h || h->magic != 0x4D424350u || h->base != APP_BASE || h->end < APP_BASE + n ||
         h->end > APP_BASE + APP_MAX || h->entry < APP_BASE || h->entry >= APP_BASE + n) {
         pr("PKG: no es un modulo de BASIC-OS valido para la tienda (debe enlazarse a 0x9000000)\n");
