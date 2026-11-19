@@ -31,3 +31,9 @@ __pycache__/
 # bas2bin (generados)
 tools/bas2bin/b2b_blobs.h
 tools/bas2bin/bas2bin
+
+# MPLAY: FFmpeg se baja y compila aqui (no se sube)
+tools/mplay/ffmpeg/
+tools/mplay/ffout/
+tools/mplay/*.o
+tools/mplay/mplay.elf

@@ -185,6 +185,12 @@ endef
 $(foreach a,$(STOREAPPS),$(eval $(call STOREAPP,$(a))))
 store: $(foreach a,$(STOREAPPS),store/$(shell echo $(a) | tr a-z A-Z).BIN)
 
+# MPLAY.BIN: reproductor de video con FFmpeg (paquete opcional de la tienda). La primera vez baja y compila FFmpeg (~5 min).
+# Necesita musl-gcc (Arch: pacman -S musl), nasm y git. Ver tools/mplay/.
+mplay:
+	tools/mplay/build.sh
+.PHONY: mplay
+
 # NET.BIN (iPXE con HTTPS): baja iPXE de GitHub y lo compila con los parches de tools/net/overlay (~2 min). Hace falta para PKG.
 # pc-basic-video.img = PC BASIC + FAT16 con un video .BVC:  make pc-basic-video.img VIDEO=salida.bvc   (ver tools/mkbvc.c)
 # cliente del foro para Linux (SDL2 + SDL2_ttf; la red la hace el programa curl): tools/forosdl [https://hub] [clave]

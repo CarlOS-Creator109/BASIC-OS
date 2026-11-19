@@ -100,6 +100,7 @@ PKG, INSTALL) se compila para 32 bits.
 | `lib.c` | `memset`, `memcpy`, `memmove`, `memcmp`, `strlen` |
 | `tools/cosmos/` + `sys/cosmosapp.c` | Navegador COSMOS: motor MM de Cosmos Browser (`html.c`, `layout.c`), libc mínima, pintado y red (`cosmosmm.c`) → `COSMOS.BIN` en la partición FAT; `COSMOS.APP` lo carga |
 | `basic.c` | El intérprete de BASIC (sin dependencias de hardware) |
+| `tools/mplay/` | MPLAY.BIN: reproductor con FFmpeg + capa Linux (syscalls de musl sobre la kapi) |
 | `sys/wtk.h` | WTK: kit de ventanas (botones, cajas, listas, menús...) para apps y programas de la tienda |
 | `sys/binwin.h` | aviso compartido de "programa de la tienda con ventana abierta" |
 | `sys/foro.c` | FORO.APP: foro de texto (lista de hilos, leer, responder y abrir hilos por el hub) |
@@ -369,6 +370,21 @@ y el cambio de tamaño. Es una cabecera, así que sirve igual para las apps de `
 el escritorio se abre solo con esa ventana (lo mismo pasa con `EXEC "COSMOS.APP"` o cualquier app de ventana); desde una terminal del escritorio aparece al lado.
 Mientras esa ventana está abierta, su código ocupa la memoria de la tienda (0x9000000), así que PKG, FORO, COSMOS y PLAY esperan
 a que la cierres (`sys/binwin.h`). Solo puede haber un programa de la tienda con ventana a la vez.
+
+## MPLAY: video con FFmpeg (paquete opcional de la tienda)
+`MPLAY.BIN` es un reproductor de video hecho con **FFmpeg 7.1**, corriendo dentro de BASIC-OS. Se instala desde `PKG` como cualquier programa;
+pregunta el archivo (por ejemplo `HD0.1:VIDEO.MP4`) y lo reproduce a pantalla completa con sonido.
+
+- **Formatos:** MP4/MOV, MKV/WebM, AVI, OGG, FLV, MPEG-TS/PS, y audio suelto MP3, WAV, FLAC, AAC.
+- **Video:** H.264, H.265 (HEVC), MPEG-4, MPEG-1/2, VP8, VP9, Theora, MJPEG. **Audio:** AAC, MP3, MP2, Vorbis, Opus, FLAC, AC-3, PCM.
+- **Teclas:** Espacio = pausa, ← / → = atrasar o adelantar 10 s, ↑ / ↓ = volumen, ESC = salir.
+- **RAM:** el archivo se carga entero en la memoria alta. Hacen falta al menos 240 MB y unos 60 MB libres más que el archivo (en QEMU usa `-m 512`).
+- **Cómo funciona:** FFmpeg se compila con **musl** como si fuera para Linux. `tools/mplay/linux.c` es una capa pequeña de "Linux falso":
+  la instrucción `SYSCALL` apunta a ella y traduce las llamadas de musl a la kapi (`write` → consola, `mmap` → páginas de la RAM alta,
+  `clock_gettime` → `K->ms`, `exit` → volver a PKG). Así FFmpeg corre sin cambios, y esta capa sirve de base para portar más programas de Linux.
+- **Compilar:** `make mplay` (la primera vez baja y compila FFmpeg, ~5 minutos; necesita `musl-gcc`, `nasm` y `git`). Sale `store/MPLAY.BIN`
+  (~7 MB). Como pasa del límite de subida de PKG (2 MB), se publica con git en la carpeta `store/`.
+- **Velocidad:** el ensamblador de FFmpeg está activado y elige por CPU (en la Vaio usa SSE2/SSE3). VP9 y HEVC sin SSSE3 van en C: en hardware real bien a resoluciones bajas, en QEMU sin KVM lento.
 
 ## Navegador COSMOS (Minimal Motor de Cosmos Browser)
 Icono **COSMOS** en el escritorio (tecla **N**) o `EXEC "COSMOS.APP"` desde BASIC. Es una **ventana** del escritorio (se puede mover,

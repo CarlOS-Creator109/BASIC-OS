@@ -28,5 +28,7 @@ Este repo incluye o usa:
 | PureDOOM (parcheado) | `tools/doom/PureDOOM.h` | DOOM Source License de id Software / licencia de PureDOOM (Daivuk) |
 | `doom1.wad` (DOOM shareware) | `tools/doom/` | Shareware de id Software: se puede redistribuir sin modificar, no vender. **No subas tu `DOOM.WAD` / `DOOM2.WAD` completos.** |
 | Certificados raiz (se embeben en `NET.BIN`) | generados por `tools/net/build.sh` | Mozilla CA bundle (MPL-2.0) |
+| FFmpeg 7.1 (libavformat, libavcodec, libswscale, libswresample, libavutil) dentro de `store/MPLAY.BIN` | se baja con `tools/mplay/build.sh` (la configuracion exacta esta ahi) | LGPL-2.1-or-later (sin partes GPL). MPLAY entero se distribuye bajo GPL-2.0-or-later con sus fuentes en este repo. |
+| musl libc (enlazada dentro de `store/MPLAY.BIN`) | la del sistema (`musl-gcc`) | MIT |
 | Linux (BZIMAGE) y Tiny Core (INITRD) para BASHTERM/TINYCORE | `tools/linux/` | GPL-2.0 y las de cada paquete |
 | FTTS (motor de voz de `sys/say.c`) y los formantes de espeak-ng (es-419) incrustados en su tabla `OV[]` | `sys/say.c` | codigo de FTTS: del autor; los valores de formantes vienen de espeak-ng (GPL-3.0-or-later), asi que `SAY.APP` se distribuye bajo GPL-3.0-or-later |
