@@ -1,0 +1,20 @@
+# Mi prueba hasta ahora
+== Nomura | 2026-11-19 09:01 UTC
+2 detalles que queria comentarte, Carlos
+COSMOS abre FrogFind y muestra biene su pagina pero
+no puedo escribir en el campo de busqueda, al hacer click en
+el campo, no recibe teclado.
+Todo lo que escribo va a la barra de direcciones,
+los enlaces de la pagina si funcionan
++
+Segundo, el teclado parece usar la distribuicion de Espania
+Mi chromebook tiene teclado US y los signos de puntuacion
+no coinciden con las teclas
+Esto dificulta bastante escribir direcciones web
++
++
+Por lo demas, disfruto DOOM y mi yo chavval interior se siente como
+Metalhead rudo
++
++
+Oh, 3ro, el editor del foro me confundio al principio
