@@ -66,7 +66,12 @@ entry.o: entry.asm thunk.bin
 	nasm -f elf64 $< -o $@
 
 %.o: %.c kernel.h basic.h store.h fs.h kapi.h audio.h cd.h sys.h module.h
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(if $(filter $@,$(KOS)),$(KOSFLAGS)) -c $< -o $@
+
+# drivers y codigo que corre poco se compilan con -Os para que el kernel quepa en KSECT (los gcc nuevos, como el
+# de Arch, hacen el codigo mas grande con -O2). Lo que corre siempre (BASIC, VGA, audio, teclado, reloj) sigue en -O2.
+KOS      := kernel.o sysinfo.o store.o pci.o mouse.o bios.o blk.o fs.o mmio.o usb.o hda.o ac97.o atapi.o cd.o sys.o module.o ram.o
+KOSFLAGS := -Os
 
 kernel.elf: $(OBJS) linker.ld
 	ld $(LDFLAGS) $(OBJS) -o $@
@@ -75,7 +80,7 @@ kernel.bin: kernel.elf
 	objcopy -O binary $< $@
 	@size=$$(stat -c %s $@); max=$$(( $(KSECT) * 512 )); \
 	 echo "kernel.bin: $$size bytes (maximo $$max)"; \
-	 [ $$size -le $$max ] || { echo "El kernel no cabe: sube KSECT"; exit 1; }
+	 [ $$size -le $$max ] || { echo "El kernel no cabe: sube KSECT (max 226) o pasa mas archivos a KOS (-Os)"; exit 1; }
 
 # ---- modulos de /SYS: el escritorio y las apps NO van en el kernel, van como archivos dentro de la imagen ----
 MODLD := ld -m $(LDEMU) -T mod.ld -nostdlib -z noexecstack --no-warn-rwx-segments
