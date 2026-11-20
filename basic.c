@@ -1770,7 +1770,7 @@ static void st_help(void)
     puts_("SOUND KICK|SNARE,HZ,MS  HIHAT,MS  OFF\n");
     puts_("SOUND DRUMKIT,HZ,KIT(0-3),MS  SNDWAIT\n");
     puts_("CDTOC CDPLAY [N] CDSTOP CDEJECT CDSTAT\n");
-    puts_("DESKTOP  YAAI  BASHTERM  TINYCORE  NET  PKG  FORO  KEYB  RAM  TAREAS  INSTALL  PLAY \"X.BVC\"  SAY \"TEXTO\"  EXEC \"X.APP\"  LOAD \"\" = PONG\n");
+    puts_("DESKTOP  YAAI  BASHTERM  TINYCORE  NET  RED  PKG  FORO  KEYB  RAM  TAREAS  INSTALL  PLAY \"X.BVC\"  SAY \"TEXTO\"  EXEC \"X.APP\"  LOAD \"\" = PONG\n");
     puts_("LOCATE COL,ROW  (TEXT CURSOR)\n");
     puts_("UNIX = LS CAT RM CLEAR MAN... (ATAJOS PARA LINUX)\n");
     puts_("PCI = LIST PCI DEVICES\n");
@@ -2018,6 +2018,20 @@ static void exec_statement(void)
             net_args[i] = 0;
         }
         r = plat_exec("NET.APP");
+        if (r < 0)
+            exec_fail(r);
+    } else if (kw("RED")) {
+        int r, i;
+        net_args[0] = 0;
+        skip_ws();
+        if (*tp == '"') {
+            if (!get_spec())
+                return;
+            for (i = 0; spec[i] && i < (int)sizeof net_args - 1; i++)
+                net_args[i] = spec[i];
+            net_args[i] = 0;
+        }
+        r = plat_exec("RED.APP");
         if (r < 0)
             exec_fail(r);
     } else if (kw("PLAY")) {

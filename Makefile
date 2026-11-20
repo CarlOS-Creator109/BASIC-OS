@@ -87,12 +87,12 @@ kernel.bin: kernel.elf
 MODLD := ld -m $(LDEMU) -T mod.ld -nostdlib -z noexecstack --no-warn-rwx-segments
 SYSDIR := sys
 SYSFILES := GUI.SYS=$(SYSDIR)/GUI.SYS PONG.APP=$(SYSDIR)/PONG.APP CALC.APP=$(SYSDIR)/CALC.APP \
-            FILES.APP=$(SYSDIR)/FILES.APP YAAI.APP=$(SYSDIR)/YAAI.APP BASHTERM.APP=$(SYSDIR)/BASHTERM.APP TINYCORE.APP=$(SYSDIR)/TINYCORE.APP NET.APP=$(SYSDIR)/NET.APP DOOM.APP=$(SYSDIR)/DOOM.APP PKG.APP=$(SYSDIR)/PKG.APP FORO.APP=$(SYSDIR)/FORO.APP INSTALL.APP=$(SYSDIR)/INSTALL.APP PLAY.APP=$(SYSDIR)/PLAY.APP SAY.APP=$(SYSDIR)/SAY.APP COSMOS.APP=$(SYSDIR)/COSMOS.APP PONG.BAS=$(SYSDIR)/pong.bas \
+            FILES.APP=$(SYSDIR)/FILES.APP YAAI.APP=$(SYSDIR)/YAAI.APP BASHTERM.APP=$(SYSDIR)/BASHTERM.APP TINYCORE.APP=$(SYSDIR)/TINYCORE.APP NET.APP=$(SYSDIR)/NET.APP RED.APP=$(SYSDIR)/RED.APP DOOM.APP=$(SYSDIR)/DOOM.APP PKG.APP=$(SYSDIR)/PKG.APP FORO.APP=$(SYSDIR)/FORO.APP INSTALL.APP=$(SYSDIR)/INSTALL.APP PLAY.APP=$(SYSDIR)/PLAY.APP SAY.APP=$(SYSDIR)/SAY.APP COSMOS.APP=$(SYSDIR)/COSMOS.APP PONG.BAS=$(SYSDIR)/pong.bas \
             $(foreach i,$(wildcard icons/*.icb),$(shell echo $(notdir $(i)) | tr a-z A-Z)=$(i))
 
 # ARCH=32: estas apps dependen del modo largo (arrancan Linux de 64 bits, iPXE de 64 bits o el motor DOOM de 64 bits)
 ifeq ($(ARCH),32)
-NO32 := BASHTERM TINYCORE NET DOOM COSMOS
+NO32 := BASHTERM TINYCORE NET RED DOOM COSMOS
 SYSFILES := $(filter-out $(addsuffix .APP=%,$(NO32)),$(SYSFILES))
 endif
 SYSPATHS := $(foreach f,$(SYSFILES),$(lastword $(subst =, ,$(f))))
@@ -126,6 +126,7 @@ $(eval $(call APP,INSTALL,install,0x6C0000))
 $(eval $(call APP,PLAY,play,0x6D0000))
 $(eval $(call APP,SAY,say,0x6E0000))
 $(eval $(call APP,COSMOS,cosmosapp,0x690000))
+$(eval $(call APP,RED,redapp,0x6D8000))
 
 # SAY usa SSE2 (el modulo lo activa solo): sin -mgeneral-regs-only y sin libm
 $(SYSDIR)/say.o: $(SYSDIR)/say.c kapi.h mod_head.h
@@ -149,6 +150,15 @@ DOOM.BIN: $(SYSDIR)/doom.o $(LIBO) mod.ld
 	objcopy -O binary $(SYSDIR)/doom.elf $@
 	@ls -l $@ | awk '{print "DOOM.BIN: " $$5 " bytes"}'
 
+# ---- RED.BIN: la pila de red propia (driver e1000 + IP/UDP/DHCP, en C puro), modulo PCBM enlazado a 0x4000000.
+#      Va en la particion junto a NET.BIN; RED.APP la carga. iPXE (NET.BIN) sigue para HTTPS mientras RED no tenga TLS. ----
+tools/red/red.o: tools/red/red.c kapi.h mod_head.h
+	$(CC) $(filter-out -O2,$(CFLAGS)) -Os -I. -c $< -o $@
+RED.BIN: tools/red/red.o $(LIBO) mod.ld
+	$(MODLD) --defsym=MODBASE=0x4000000 tools/red/red.o $(LIBO) -o tools/red/red.elf
+	objcopy -O binary tools/red/red.elf $@
+	@ls -l $@ | awk '{print "RED.BIN: " $$5 " bytes"}'
+
 # ---- COSMOS: navegador con el Minimal Motor (MM) de Cosmos Browser (tools/cosmos/). Como DOOM, no cabe en /SYS:
 #      COSMOS.BIN va en la particion FAT junto a NET.BIN y lo carga COSMOS.APP. El motor usa float: SSE2 como SAY ----
 CMDIR := tools/cosmos
@@ -171,9 +181,9 @@ COSMOS.BIN: $(CMOBJS) mod.ld
 WAD ?= $(DOOMDIR)/doom1.wad
 HUB_URL ?=                      # make pc-basic-doom.img HUB_URL=https://mi-hub.onrender.com  -> HUB.CFG en la imagen
 HUB_KEY ?=                      # clave para subir paquetes con PKG (2a linea de HUB.CFG; quien tenga la imagen puede subir)
-pc-basic-doom.img: pc-basic.img DOOM.BIN COSMOS.BIN tools/mkbashimg $(WAD)
+pc-basic-doom.img: pc-basic.img DOOM.BIN COSMOS.BIN RED.BIN tools/mkbashimg $(WAD)
 	tools/mkbashimg $@ pc-basic.img tools/linux/BZIMAGE tools/linux/INITRD.GZ \
-	  --copy DOOM.BIN=DOOM.BIN --copy COSMOS.BIN=COSMOS.BIN --copy $(WAD)=$(shell echo $(notdir $(WAD)) | tr a-z A-Z) \
+	  --copy DOOM.BIN=DOOM.BIN --copy COSMOS.BIN=COSMOS.BIN --copy RED.BIN=RED.BIN --copy $(WAD)=$(shell echo $(notdir $(WAD)) | tr a-z A-Z) \
 	  $$( [ -f tools/net/NET.BIN ] && echo --copy tools/net/NET.BIN=NET.BIN ) \
 	  $$( [ -n "$(HUB_URL)" ] && { { echo "$(HUB_URL)"; [ -z "$(HUB_KEY)" ] || echo "$(HUB_KEY)"; } > HUB.CFG; echo --copy HUB.CFG=HUB.CFG; } ) --mib 64
 	@echo "Imagen lista: $@  (QEMU: qemu-system-x86_64 -drive format=raw,file=$@,if=ide -m 128)"
@@ -243,10 +253,10 @@ tools/bfstest: tools/bfstest.c bfs.c bfs.h
 bfs-test: tools/bfstest
 	for s in 1 2 3; do tools/bfstest $$s || exit 1; done
 BFS_MB ?= 1024
-basic-os-bfs.img: pc-basic.img DOOM.BIN COSMOS.BIN tools/mkbfs $(WAD) store/COMETAS.BIN
+basic-os-bfs.img: pc-basic.img DOOM.BIN COSMOS.BIN RED.BIN tools/mkbfs $(WAD) store/COMETAS.BIN
 	rm -f $@
 	tools/mkbfs nuevo $@ $(BFS_MB) --arranque pc-basic.img --etiqueta BASIC-OS
-	for f in DOOM.BIN COSMOS.BIN $(WAD) tools/linux/BZIMAGE tools/linux/INITRD.GZ; do tools/mkbfs meter $@ $$f / > /dev/null; done
+	for f in DOOM.BIN COSMOS.BIN RED.BIN $(WAD) tools/linux/BZIMAGE tools/linux/INITRD.GZ; do tools/mkbfs meter $@ $$f / > /dev/null; done
 	tools/mkbfs mv $@ /$(notdir $(WAD)) /$(shell echo $(notdir $(WAD)) | tr a-z A-Z)
 	[ ! -f tools/net/NET.BIN ] || tools/mkbfs meter $@ tools/net/NET.BIN / > /dev/null
 	[ -z "$(HUB_URL)" ] || { { echo "$(HUB_URL)"; [ -z "$(HUB_KEY)" ] || echo "$(HUB_KEY)"; } > HUB.CFG; tools/mkbfs meter $@ HUB.CFG / > /dev/null; }
@@ -263,7 +273,7 @@ BVCOPTS ?=
 videos: tools/mkbvc tools/videos.py
 	python3 tools/videos.py "$(VIDEOS)" videos $(BVCOPTS)
 
-pc-basic-video.img: pc-basic.img COSMOS.BIN tools/mkbashimg $(VIDEO)
+pc-basic-video.img: pc-basic.img COSMOS.BIN RED.BIN tools/mkbashimg $(VIDEO)
 	tools/mkbashimg $@ pc-basic.img tools/linux/BZIMAGE tools/linux/INITRD.GZ --copy $(VIDEO)=$(shell echo $(notdir $(VIDEO)) | tr a-z A-Z) --copy COSMOS.BIN=COSMOS.BIN \
 	  $$( [ -f tools/net/NET.BIN ] && echo --copy tools/net/NET.BIN=NET.BIN ) --mib $$(( ( $$(stat -c %s $(VIDEO)) / 1048576 ) + 24 ))
 	@echo "Imagen lista: $@  (QEMU: qemu-system-x86_64 -drive format=raw,file=$@,if=ide -m 512 ...; en BASIC: PLAY \"$(shell echo $(notdir $(VIDEO)) | tr a-z A-Z)\")"
@@ -305,11 +315,11 @@ $(SUPERDIR)/super.bin: $(SUPERDIR)/super.asm $(SUPERDIR)/hook.bin
 SUPER_FS ?= bfs
 SUPER_MB  = $$(( 64 + $(if $(wildcard $(VIDEO)),$$(stat -c %s $(VIDEO)) / 1048576,0) ))
 ifeq ($(SUPER_FS),bfs)
-build-super/completo64.img: pc-basic.img DOOM.BIN COSMOS.BIN tools/mkbfs $(WAD) $(wildcard $(VIDEO)) store/COMETAS.BIN Makefile
+build-super/completo64.img: pc-basic.img DOOM.BIN COSMOS.BIN RED.BIN tools/mkbfs $(WAD) $(wildcard $(VIDEO)) store/COMETAS.BIN Makefile
 	mkdir -p build-super
 	rm -f $@
 	tools/mkbfs nuevo $@ $(SUPER_MB) --arranque pc-basic.img --etiqueta BASIC-OS
-	for f in DOOM.BIN COSMOS.BIN $(WAD) tools/linux/BZIMAGE tools/linux/INITRD.GZ $(wildcard $(VIDEO)); do tools/mkbfs meter $@ $$f / > /dev/null; done
+	for f in DOOM.BIN COSMOS.BIN RED.BIN $(WAD) tools/linux/BZIMAGE tools/linux/INITRD.GZ $(wildcard $(VIDEO)); do tools/mkbfs meter $@ $$f / > /dev/null; done
 	tools/mkbfs mv $@ /$(notdir $(WAD)) /$(shell echo $(notdir $(WAD)) | tr a-z A-Z)
 	$(if $(wildcard $(VIDEO)),tools/mkbfs mv $@ /$(notdir $(VIDEO)) /$(shell echo $(notdir $(VIDEO)) | tr a-z A-Z))
 	[ ! -f tools/net/NET.BIN ] || tools/mkbfs meter $@ tools/net/NET.BIN / > /dev/null
@@ -318,10 +328,10 @@ build-super/completo64.img: pc-basic.img DOOM.BIN COSMOS.BIN tools/mkbfs $(WAD) 
 	tools/mkbfs mkdir $@ /VIDEOS
 	tools/mkbfs revisar $@
 else
-build-super/completo64.img: pc-basic.img DOOM.BIN COSMOS.BIN tools/mkbashimg $(WAD) $(wildcard $(VIDEO)) Makefile
+build-super/completo64.img: pc-basic.img DOOM.BIN COSMOS.BIN RED.BIN tools/mkbashimg $(WAD) $(wildcard $(VIDEO)) Makefile
 	mkdir -p build-super
 	tools/mkbashimg $@ pc-basic.img tools/linux/BZIMAGE tools/linux/INITRD.GZ \
-	  --copy DOOM.BIN=DOOM.BIN --copy COSMOS.BIN=COSMOS.BIN --copy $(WAD)=$(shell echo $(notdir $(WAD)) | tr a-z A-Z) \
+	  --copy DOOM.BIN=DOOM.BIN --copy COSMOS.BIN=COSMOS.BIN --copy RED.BIN=RED.BIN --copy $(WAD)=$(shell echo $(notdir $(WAD)) | tr a-z A-Z) \
 	  $(if $(wildcard $(VIDEO)),--copy $(VIDEO)=$(shell echo $(notdir $(VIDEO)) | tr a-z A-Z)) \
 	  $$( [ -f tools/net/NET.BIN ] && echo --copy tools/net/NET.BIN=NET.BIN ) \
 	  $$( [ -n "$(HUB_URL)" ] && { { echo "$(HUB_URL)"; [ -z "$(HUB_KEY)" ] || echo "$(HUB_KEY)"; } > HUB.CFG; echo --copy HUB.CFG=HUB.CFG; } ) \
@@ -356,7 +366,7 @@ test:
 
 clean:
 	rm -rf build32 pc-basic32.img build-super super-basicos.img $(SUPERDIR)/*.bin
-	rm -f tools/mkbashimg tools/mkbvc tools/bvcplay tools/mkbfs tools/bfstest basic-os-bfs.img
+	rm -f tools/mkbashimg tools/mkbvc tools/bvcplay tools/mkbfs tools/bfstest basic-os-bfs.img RED.BIN tools/red/red.o tools/red/red.elf
 	rm -f $(CMDIR)/*.o $(CMDIR)/cosmos.elf COSMOS.BIN
 	rm -f $(B2B)/*.o $(B2B)/*.elf $(B2B)/*.bin $(B2B)/b2b_blobs.h $(B2B)/bas2bin
 	rm -f *.o *.elf *.bin pc-basic.img pc-basic-doom.img $(SYSDIR)/*.o $(SYSDIR)/*.elf $(SYSDIR)/*.SYS $(SYSDIR)/*.APP apps/*.o apps/*.elf
