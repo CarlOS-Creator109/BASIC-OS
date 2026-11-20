@@ -263,29 +263,36 @@ Programa de broma: un video convertido a texto (120x45 caracteres, 12.5 cuadros/
 - Kernels de 32 bits: el módulo vuelve de modo largo a modo protegido sin paginación (GDT plana, `CR0.PG=0`, `EFER.LME=0`, `CR4.PAE=0`) y salta al inicio del núcleo protegido con `ESI = boot_params`. Los de 64 bits siguen usando la entrada `startup_64`.
 - Opciones editables sin recompilar: `TINYCORE.CFG` / `BASHTERM.CFG` en la partición (`kernel=RUTA`, `initrd=RUTA`, `cmdline=TEXTO`). Por defecto Tiny Core arranca con `loglevel=3 cde showapps desktop=flwm_topside kmap=qwerty/la-latin1 waitusb=10 tz=CST6 host=basic-os`.
 
-## Red propia (RED) — pila en C puro, sin iPXE
-`RED` es la pila de red **nuestra**, escrita a mano (`tools/red/red.c`), sin nada de iPXE. Es un módulo PCBM (`RED.BIN`, enlazado
-a 0x4000000) que `RED.APP` carga desde la partición, igual que `DOOM.BIN`. Recibe el `kapi` del kernel y hace todo solo: escanea
-el bus PCI, mapea el BAR de la tarjeta con `map_mmio`, pone los anillos de descriptores en un banco de RAM y **sondea** (el kernel
-no usa las interrupciones de la tarjeta).
+## Red propia (BN — BOS NET), en C puro, sin iPXE
+`BN` (BOS NET) es la pila de red **nuestra**, escrita a mano (`tools/bn/bn.c`), sin nada de iPXE. Es un módulo PCBM
+(`BN.BIN`, enlazado a 0x4000000) que `BN.APP` carga desde la partición, igual que `DOOM.BIN`. Recibe el `kapi` del kernel
+y hace todo solo: escanea el bus PCI, mapea el BAR de la tarjeta con `map_mmio`, pone los anillos de descriptores en un
+banco de RAM y **sondea** (el kernel no usa las interrupciones de la tarjeta).
 
-Lo que ya hay (parte 1):
-- **Driver Intel e1000** (la tarjeta de QEMU, `8086:100E`, y parientes `100F/1010/1026/10D3/153A/10EA/1502`): reset, lee la MAC,
-  anillos RX/TX, enviar y recibir tramas.
-- **Ethernet + ARP** (resuelve y también contesta), **IPv4** con checksum, **UDP**, **ICMP** (ping) y **DHCP** (IP, máscara,
-  gateway, DNS).
+Lo que ya hay:
+- **Driver Intel e1000** (la tarjeta de QEMU, `8086:100E`, y parientes `100F/1010/1026/10D3/153A/10EA/1502`): reset, lee la
+  MAC, anillos RX/TX, enviar y recibir tramas.
+- **Ethernet + ARP** (resuelve y también contesta), **IPv4** con checksum, **UDP**, **ICMP** (ping).
+- **DHCP** (IP, máscara, gateway, DNS), **DNS** (consulta tipo A, con compresión de nombres), **TCP** cliente (handshake,
+  reenvíos, ventana, cierre) y **HTTP/1.1 GET**.
 
 ```
-RED              o  RED "dhcp"      pide IP por DHCP y la muestra
-RED "ping 10.0.2.2"                 DHCP y luego ping (ICMP) a esa IP
-RED "mac"                           solo enciende la tarjeta y muestra su MAC
+BN               o  BN "dhcp"               pide IP por DHCP y la muestra
+BN "mac"                                    enciende la tarjeta y muestra su MAC
+BN "ping 10.0.2.2"                          ping (ICMP)
+BN "dns ejemplo.com"                        resuelve el nombre a IP
+BN "get http://10.0.2.2:8080/hola.txt"      baja la página por HTTP y la muestra (hasta 4 KB en pantalla)
 ```
 
-Probado en QEMU (`-nic user,model=e1000`): DHCP da 10.0.2.15 y el ping al gateway responde 4 de 4.
+Probado en QEMU (`-nic user,model=e1000`): DHCP da 10.0.2.15, el ping responde 4/4, `dns example.com` devuelve su IP, y
+`get` baja una página de un servidor HTTP con un **200 OK** y su cuerpo.
 
-**El plan:** seguir por partes hasta HTTP (DNS → TCP → HTTP), y después TLS propio. Mientras tanto iPXE (`NET`, abajo) se queda
-como la opción para **HTTPS**, así PKG, FORO y COSMOS siguen funcionando con Render y GitHub hasta que RED sepa cifrar.
-Todavía no hay Wi-Fi (un driver inalámbrico a mano es otra historia): RED es por cable / QEMU.
+**Ojo con las mayúsculas:** BASIC pasa las cadenas a mayúsculas, así que una ruta como `/hola.txt` llega como `/HOLA.TXT`
+(igual que en `NET`/iPXE). Para servidores que distinguen mayúsculas, usa Shift en la consola o nombres en mayúsculas.
+
+**El plan:** falta el **TLS propio** (parte 3) para jubilar a iPXE del todo. Mientras tanto iPXE (`NET`, abajo) se queda
+como la opción para **HTTPS**, así PKG, FORO y COSMOS siguen con Render y GitHub hasta que BN sepa cifrar. Todavía no hay
+Wi-Fi: BN es por cable / QEMU.
 
 ## Red (NET) — iPXE, por ahora para HTTPS
 `NET` carga `NET.BIN` (iPXE portado: drivers e1000/e1000e/rtl81xx/pcnet/virtio y muchos mas, TCP/IP, HTTP, **HTTPS**, DHCP, DNS, NTP, ping)
