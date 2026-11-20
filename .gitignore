@@ -48,3 +48,8 @@ tools/bcc/bcc
 tools/bcc/bccrun
 tools/bcc/*.o
 tools/bcc/*.elf
+
+# BFS
+tools/mkbfs
+tools/bfstest
+basic-os-bfs.img

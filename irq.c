@@ -192,19 +192,34 @@ static u64 irq_save_off(void)
     return fl;
 }
 
-/* alrededor de cada llamada a la BIOS (bios.c) */
+/* alrededor de cada llamada a la BIOS (bios.c). Mientras la BIOS trabaja el reloj de 1000 Hz no corre: se mide
+ * cuanto tardo con el PIT a 18.2 Hz (contador de la BIOS en 0x46C + lo que bajo el canal 0) y se suma a irq_ticks,
+ * para que K->ms() no se atrase con cada lectura del disco. */
+static u32 bios_t0;
+static u32 bda_ticks(void) { u32 v; __asm__ volatile("movl 0x46C, %0" : "=r"(v)); return v; }
+static u64 bios_rem;
 u64 irq_bios_enter(void)
 {
     u64 fl;
     if (!irq_on) return 0;
     fl = irq_save_off();
     irq_bios_mode();
+    bios_t0 = bda_ticks();
     return fl | 1;
 }
 void irq_bios_leave(u64 st)
 {
+    u32 c, t1;
+    u64 counts;
     if (!st) return;
     __asm__ volatile("cli");
+    outb(0x43, 0x00);                           /* congelar la cuenta del canal 0 */
+    c = inb(0x40);
+    c |= (u32)inb(0x40) << 8;
+    t1 = bda_ticks();
+    counts = (u64)(t1 - bios_t0) * 65536ull + (c ? 65536u - c : 0) + bios_rem;
+    irq_ticks += counts / 1193;                 /* 1193 cuentas = 1 ms */
+    bios_rem = counts % 1193;
     irq_kernel_mode();
     if (st & 0x200) __asm__ volatile("sti");
 }

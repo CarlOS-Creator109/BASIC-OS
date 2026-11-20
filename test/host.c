@@ -26,6 +26,13 @@ int  plat_mouse(int w)                    { return w + 7; }
 int  plat_drive_line(int i, char *o)      { (void)i; (void)o; return 0; }
 int  fs_dir(const char *s, fs_cb cb)      { (void)s; (void)cb; return FS_ENODEV; }
 int  fs_read(const char *s, char *b, int m, unsigned int *t) { (void)s; (void)b; (void)m; (void)t; return FS_ENODEV; }
+int  fs_write(const char *s, const void *d, unsigned int n) { (void)s; (void)d; (void)n; return FS_ENODEV; }
+int  fs_mkdir(const char *s) { (void)s; return FS_ENODEV; }
+int  fs_remove(const char *s) { (void)s; return FS_ENODEV; }
+int  fs_rename(const char *s, const char *t) { (void)s; (void)t; return FS_ENODEV; }
+int  fs_space(const char *s, unsigned long long *f, unsigned long long *t) { (void)s; (void)f; (void)t; return FS_ENODEV; }
+const char *fs_kind(void) { return "?"; }
+int  fs_format(const char *s, const char *l) { (void)s; (void)l; return FS_ENODEV; }
 int  plat_pci_line(int i, char *o)        { (void)i; (void)o; return 0; }
 void plat_beep(int ms, int hz)            { printf("[BEEP %d,%d]", ms, hz); }
 int  plat_sound(int k, int h, int a, int m)  { printf("[SOUND %d,%d,%d,%d]", k, h, a, m); return 1; }
@@ -38,6 +45,7 @@ int  plat_cd_status(int *t, int *s)       { *t = 0; *s = 0; return 0; }
 int  plat_exec(const char *n)             { (void)n; return -1; }
 int  plat_keyb(const char *a)             { (void)a; return -1; }
 int  plat_bmg(int op, int a, int b, int c, const char *s) { (void)b; (void)c; (void)s; return op == 6 ? -3 : (a < 0 || a > 31 ? -1 : 0); }
+int  plat_copy(const char *f, const char *t) { (void)f; (void)t; return -1; }
 int  plat_keydown(int k)                  { (void)k; return 0; }
 int  plat_ram_line(int i, char *o)        { (void)i; o[0] = 0; return 0; }
 int  plat_task_line(int i, char *o)       { (void)i; o[0] = 0; return 0; }

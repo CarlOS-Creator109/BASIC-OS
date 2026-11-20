@@ -16,6 +16,27 @@ int  plat_col(void)                       { return vga_col(); }
 void plat_clear(void)                     { vga_clear(); bmg_api(8, 0, 0, 0, 0); }
 int  plat_bmg(int op, int a, int b, int c, const char *s) { return bmg_api(op, a, b, c, s); }
 int  plat_keydown(int code)               { return kbd_held(code); }
+
+/* CP: lee el archivo entero a bancos de RAM y lo escribe en el destino (BFS) */
+int plat_copy(const char *from, const char *to)
+{
+    unsigned int total = 0, nb;
+    char probe[4];
+    int r = fs_read(from, probe, 0, &total);
+    u64 buf;
+    if (r < 0)
+        return r;
+    nb = (unsigned int)(((u64)total + 0x1FFFFFFull) / 0x2000000ull);
+    if (!nb) nb = 1;
+    buf = ram_api(RAM_ALLOC, 0, nb, "COPIA");
+    if (!buf)
+        return FS_ENOSPC;
+    r = fs_read(from, (char *)(unsigned long)buf, (int)(total > 0x7FFFFFFFu ? 0x7FFFFFFFu : total), &total);
+    if (r >= 0)
+        r = fs_write(to, (const void *)(unsigned long)buf, (unsigned int)r);
+    ram_api(RAM_FREE, buf, 0, 0);
+    return r < 0 ? r : 0;
+}
 void plat_color(int fg, int bg)           { vga_setcolor(fg, bg); }
 int  plat_readline(char *buf, int max)    { return kbd_readline(buf, max); }
 int  plat_break(void)                     { return kbd_esc(); }
@@ -157,6 +178,29 @@ static void api_mouse(int *x, int *y, int *b)
 static void api_sleep(int ms)             { delay_ms(ms); }
 static void api_sound(int k, int hz, int arg, int ms) { audio_sound(k, hz, arg, ms); }
 static int  api_dir(const char *spec, kapi_dircb cb)  { return fs_dir(spec, cb); }
+static int api_fsop(int op, const char *spec, const void *data, unsigned long long size, const char *spec2)
+{
+    switch (op) {
+    case FSOP_WRITE:  return size > 0xFFFFFFFFull ? FS_E2BIG : fs_write(spec, data, (unsigned int)size);
+    case FSOP_MKDIR:  return fs_mkdir(spec);
+    case FSOP_REMOVE: return fs_remove(spec);
+    case FSOP_RENAME: return spec2 ? fs_rename(spec, spec2) : FS_ENOENT;
+    case FSOP_SPACE: {
+        unsigned long long *o = (unsigned long long *)data;
+        return fs_space(spec, o, o + 1);
+    }
+    case FSOP_FORMAT: return fs_format(spec, data ? (const char *)data : "BASIC-OS");
+    case FSOP_KIND: {
+        int r = fs_space(spec, 0, 0), i;
+        const char *k = fs_kind();
+        if (r && r != FS_EROFS) return r;
+        for (i = 0; k[i] && i < 7; i++) ((char *)data)[i] = k[i];
+        ((char *)data)[i] = 0;
+        return 0;
+    }
+    }
+    return FS_ENOENT;
+}
 static int  api_read(const char *spec, char *buf, int max, unsigned int *total)
 {
     return fs_read(spec, buf, max, total);
@@ -211,7 +255,7 @@ const struct kapi kernel_api = {
     (int (*)(const char *, int, unsigned long long, unsigned, void *))blk_api,
     api_saved,
     basic_do, basic_eval, vga_col,
-    fb_overlay, ram_api, task_api
+    fb_overlay, ram_api, task_api, api_fsop
 };
 
 static int is_gui(const char *n)

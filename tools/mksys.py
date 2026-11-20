@@ -5,7 +5,7 @@ uso: mksys.py imagen.img NOMBRE=ruta [NOMBRE=ruta ...]
 """
 import struct, sys
 
-DIR_LBA, DIR_SECT, DATA_LBA, END_LBA = 232, 4, 236, 512
+DIR_LBA, DIR_SECT, DATA_LBA, END_LBA = 312, 4, 316, 512   # antes del 312: el kernel (KSECT del Makefile)
 # segunda zona: el final del disquete, despues de las 28 ranuras de SAVE (520 + 28*80 = 2760) y hasta 2880.
 # Las entradas de /SYS guardan el LBA de cada archivo, asi que el kernel los lee igual en cualquiera de las dos.
 EXTRA_LBA, EXTRA_END = 2760, 2880

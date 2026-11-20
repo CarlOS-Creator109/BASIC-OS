@@ -36,7 +36,8 @@ void         plat_cd_stop(void);
 int          plat_cd_eject(void);
 int          plat_cd_status(int *track, int *secs);           /* 1 = suena */
 int          plat_bmg(int op, int a, int b, int c, const char *s);  /* BMG (bmg.c): sprites; <0 = error */
-int          plat_keydown(int code);                         /* 1 si la tecla esta apretada (KEYDOWN) */
+int          plat_keydown(int code);
+int          plat_copy(const char *from, const char *to);     /* CP: copia un archivo (destino BFS); FS_* */                         /* 1 si la tecla esta apretada (KEYDOWN) */
 int          plat_keyb(const char *arg);                     /* KEYB [ES|LA|US]; <0 = no existe */
 int          plat_exec(const char *name);                     /* ejecuta un modulo de /SYS; <0 = error */
 void         plat_locate(int col, int row);

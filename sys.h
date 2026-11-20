@@ -1,9 +1,9 @@
 /* sys.h - carpeta /SYS de la imagen de arranque
  *
  * Zona de solo lectura dentro de la propia imagen, entre el kernel y la zona de SAVE:
- *   LBA 232..235  directorio: firma "PCBSYS1" + n (u32) + entradas de 32 bytes
+ *   LBA 312..315  directorio: firma "PCBSYS1" + n (u32) + entradas de 32 bytes
  *                 {nombre[20], lba (u32, absoluto en la imagen), tamano (u32), reservado}
- *   LBA 236..511  datos de los archivos (alineados a sector)
+ *   LBA 316..511  datos de los archivos (alineados a sector)
  * La arma tools/mksys.py al construir la imagen. Aqui van el escritorio, las apps,
  * los iconos .icb y los programas BASIC de ejemplo: nada de eso esta dentro del kernel.
  * Se accede como "SYS:ARCHIVO" (DIR, TYPE, LOAD...).
@@ -11,9 +11,9 @@
 #ifndef SYS_H
 #define SYS_H
 
-#define SYS_DIR_LBA   232
+#define SYS_DIR_LBA   312
 #define SYS_DIR_SECT  4
-#define SYS_DATA_LBA  236
+#define SYS_DATA_LBA  316
 #define SYS_END_LBA   512
 #define SYS_EXTRA_LBA 2760                  /* si no cabe, mksys.py sigue al final del disquete (2760-2879, despues de SAVE) */
 

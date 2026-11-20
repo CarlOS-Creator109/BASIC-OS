@@ -1387,28 +1387,6 @@ static void store_fail(int r)
 }
 
 /* Lee el nombre (cadena) que sigue al comando */
-static int get_name(char *name)
-{
-    char t[STR_MAX + 1];
-    int i;
-
-    skip_ws();
-    if (*tp == 0 || *tp == ':') {
-        fail("MISSING FILE NAME  ERROR");
-        return 0;
-    }
-    sexpr(t);
-    if (err)
-        return 0;
-    for (i = 0; i < STORE_NAME_MAX && t[i]; i++)
-        name[i] = t[i];
-    name[i] = 0;
-    if (!name[0]) {
-        fail("MISSING FILE NAME  ERROR");
-        return 0;
-    }
-    return 1;
-}
 
 static int put_num(char *b, int n, int v)
 {
@@ -1425,13 +1403,26 @@ static int put_num(char *b, int n, int v)
     return n;
 }
 
+static void fs_fail(int r);
+static int has_colon(const char *p);
+static int get_spec(void);
 static void st_save(void)
 {
     char name[STORE_NAME_MAX + 1];
-    int i, n = 0, r;
+    int i, n = 0, r, disk;
 
-    if (!get_name(name))
+    if (!get_spec())
         return;
+    disk = has_colon(spec);                     /* SAVE "HD0.1:/JUEGOS/MI JUEGO.BAS": a un disco BFS */
+    if (!disk) {
+        for (i = 0; i < STORE_NAME_MAX && spec[i]; i++)
+            name[i] = spec[i];
+        name[i] = 0;
+        if (!name[0]) {
+            fail("MISSING FILE NAME  ERROR");
+            return;
+        }
+    }
     for (i = 0; i < nlines; i++) {
         const char *p = prog[i].text;
         if (n + 8 + LINE_LEN > STORE_SLOT_BYTES) {
@@ -1445,8 +1436,14 @@ static void st_save(void)
         blob[n++] = '\n';
     }
     puts_("SAVING ");
-    puts_(name);
+    puts_(disk ? spec : name);
     plat_putc('\n');
+    if (disk) {
+        r = fs_write(spec, blob, (unsigned int)n);
+        if (r)
+            fs_fail(r);
+        return;
+    }
     r = store_save(name, blob, n);
     if (r)
         store_fail(r);
@@ -1459,6 +1456,11 @@ static void fs_fail(int r)
     else if (r == FS_E2BIG)   fail("FILE TOO LARGE  ERROR");
     else if (r == FS_EIO)     fail("DISK READ  ERROR");
     else if (r == FS_EISDIR)  fail("FILE IS A DIRECTORY  ERROR");
+    else if (r == FS_EROFS)   fail("READ ONLY DISK (SOLO BFS SE ESCRIBE)  ERROR");
+    else if (r == FS_ENOSPC)  fail("DISK FULL  ERROR");
+    else if (r == FS_EEXIST)  fail("FILE EXISTS  ERROR");
+    else if (r == FS_ENOTEMPTY) fail("DIRECTORY NOT EMPTY  ERROR");
+    else if (r == FS_ENAME)   fail("BAD FILE NAME  ERROR");
     else                      fail("DEVICE NOT PRESENT  ERROR");
 }
 
@@ -1620,6 +1622,15 @@ static void st_dir(void)
         r = fs_dir(spec, dir_cb);
         if (r)
             fs_fail(r);
+        else {
+            unsigned long long fr, tot;
+            if (fs_space(spec, &fr, &tot) == 0) {   /* BFS: espacio libre */
+                print_int((int)(fr >> 20));
+                puts_(" MB LIBRES DE ");
+                print_int((int)(tot >> 20));
+                puts_(" (BFS)\n");
+            }
+        }
         return;
     }
 
@@ -1644,12 +1655,54 @@ static void st_dir(void)
 static void st_scratch(void)
 {
     char name[STORE_NAME_MAX + 1];
-    int r;
-    if (!get_name(name))
+    int r, i;
+    if (!get_spec())
         return;
+    if (has_colon(spec)) {                      /* SCRATCH "HD0.1:/ARCHIVO" (o una carpeta vacia) */
+        r = fs_remove(spec);
+        if (r)
+            fs_fail(r);
+        return;
+    }
+    for (i = 0; i < STORE_NAME_MAX && spec[i]; i++)
+        name[i] = spec[i];
+    name[i] = 0;
     r = store_delete(name);
     if (r)
         store_fail(r);
+}
+
+/* MKDIR "HD0.1:/CARPETA" */
+static void st_mkdir(void)
+{
+    int r;
+    if (!get_spec())
+        return;
+    if ((r = fs_mkdir(spec)))
+        fs_fail(r);
+}
+
+/* MV "HD0.1:/A", "HD0.1:/B"  (renombrar o mover dentro del mismo disco)
+ * CP "HD0.1:/A", "HD0.1:/B"  (copiar; el origen puede ser de cualquier disco, el destino BFS) */
+static void st_mv_cp(int copy)
+{
+    char from[STR_MAX + 1];
+    int r, i;
+    if (!get_spec())
+        return;
+    for (i = 0; spec[i]; i++) from[i] = spec[i];
+    from[i] = 0;
+    skip_ws();
+    if (*tp != ',') {
+        fail("SYNTAX  ERROR");
+        return;
+    }
+    tp++;
+    if (!get_spec())
+        return;
+    r = copy ? plat_copy(from, spec) : fs_rename(from, spec);
+    if (r)
+        fs_fail(r);
 }
 
 static void st_list(void)
@@ -1710,6 +1763,7 @@ static void st_help(void)
     puts_("SPRITE OFF [N]  SPRITE COPY A,B  FRAME [FPS]  HIT(A,B)  KEYDOWN(K)\n");
     puts_("SAVE \"N\"  LOAD \"N\"  DIR  SCRATCH \"N\"\n");
     puts_("DRIVES  DIR \"HD0:\"  TYPE \"HD0:F.TXT\"  LOAD \"HD0:F.BAS\"\n");
+    puts_("BFS: SAVE \"HD0.1:/X.BAS\"  MKDIR  CP \"A\",\"B\"  MV  SCRATCH \"HD0.1:/X\"\n");
     puts_("SOUND SINE|SQUARE|TRIANGLE|SAW,HZ,MS\n");
     puts_("SOUND KICK|SNARE,HZ,MS  HIHAT,MS  OFF\n");
     puts_("SOUND DRUMKIT,HZ,KIT(0-3),MS  SNDWAIT\n");
@@ -1766,7 +1820,7 @@ static void unix_hint(const char *cmd, const char *what)
 static const char *unix_last;
 static int unix_word(void)                       /* comandos de UNIX que no existen aqui */
 {
-    static const char *const w[] = { "CP", "MV", "MKDIR", "RMDIR", "TOUCH", "CD", "PWD", "NANO", "VI", "VIM",
+    static const char *const w[] = { "TOUCH", "CD", "PWD", "NANO", "VI", "VIM",
                                      "SUDO", "EXIT", "CHMOD", "GREP", "ECHO", 0 };
     int i;
     for (i = 0; w[i]; i++)
@@ -1779,7 +1833,10 @@ static void st_unix_table(void)
     puts_("UNIX/LINUX        PC BASIC\n");
     puts_("LS [DISCO:]       DIR [\"HD0.1:\"]\n");
     puts_("CAT ARCHIVO       TYPE \"HD0.1:ARCHIVO\"\n");
-    puts_("RM NOMBRE         SCRATCH \"NOMBRE\"  (PROGRAMAS DE SAVE)\n");
+    puts_("RM NOMBRE         SCRATCH \"NOMBRE\" (SAVE) O \"HD0.1:/ARCHIVO\" (BFS)\n");
+    puts_("CP A B            CP \"HD0.1:/A\",\"HD0.1:/B\"\n");
+    puts_("MV A B            MV \"HD0.1:/A\",\"HD0.1:/B\"\n");
+    puts_("MKDIR X           MKDIR \"HD0.1:/X\"   (RMDIR PARA BORRARLA)\n");
     puts_("CLEAR             CLS\n");
     puts_("MAN               HELP\n");
     puts_("./PROG.BAS        LOAD \"HD0.1:PROG.BAS\" Y LUEGO RUN\n");
@@ -1880,6 +1937,18 @@ static void exec_statement(void)
         st_drives();
     } else if (kw("SCRATCH") || kw("DELETE")) {
         st_scratch();
+    } else if (kw("MKDIR") || kw("MD")) {
+        const char *rest = alias_quote();
+        st_mkdir();
+        if (rest && !err) tp = rest;
+    } else if (kw("RMDIR")) {
+        const char *rest = alias_quote();
+        st_scratch();
+        if (rest && !err) tp = rest;
+    } else if (kw("MV") || kw("RENAME")) {
+        st_mv_cp(0);
+    } else if (kw("CP") || kw("COPY")) {
+        st_mv_cp(1);
     } else if (kw("TAREAS") || kw("PS")) {
         char ln[96];
         int i;

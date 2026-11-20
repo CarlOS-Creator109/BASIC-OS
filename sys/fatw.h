@@ -6,8 +6,32 @@
 
 /* ---- escritor FAT16 minimo: guarda los programas en HDn.1:/APPS/ del disco de arranque (solo discos de la BIOS) ---- */
 static struct {
-    int ok; char dev[8]; u32 part, spc, res, nfat, rootent, fatsz, root_lba, data_lba, nclus, dlo, dhi, csize;
+    int ok, bfs; char dev[8]; u32 part, spc, res, nfat, rootent, fatsz, root_lba, data_lba, nclus, dlo, dhi, csize;
 } fw;
+
+/* ---- disco BFS (kapi v9): lo escribe el kernel con K->fsop ---- */
+static void fw_bspec(char *o, const char *dir11, const char *name)
+{
+    int j = 0, i;
+    for (i = 0; fw.dev[i]; i++) o[j++] = fw.dev[i];
+    o[j++] = '.'; o[j++] = '1'; o[j++] = ':'; o[j++] = '/';
+    for (i = 0; i < 8 && dir11[i] && dir11[i] != ' '; i++) o[j++] = dir11[i];
+    if (name) {
+        o[j++] = '/';
+        for (i = 0; name[i] && j < 60; i++) o[j++] = name[i];
+    }
+    o[j] = 0;
+}
+static int fw_bfs_save(const char *dir11, const char *name, const u8 *data, u32 size)
+{
+    char sp[64];
+    int r;
+    fw_bspec(sp, dir11, 0);
+    K->fsop(FSOP_MKDIR, sp, 0, 0, 0);               /* si ya existe, da igual */
+    fw_bspec(sp, dir11, name);
+    r = K->fsop(FSOP_WRITE, sp, data, size, 0);
+    return r == 0 ? 0 : (r == -8 ? 4 : (r == -11 ? 1 : 3));
+}
 static u16 *const FATP = (u16 *)(unsigned long)FW_FAT;
 static u8 *const FROOT = (u8 *)(unsigned long)FW_ROOT;
 static u8 *const FBUF = (u8 *)(unsigned long)FW_BUF;
@@ -67,8 +91,16 @@ static void fw_init(void)
         return;
     for (i = 0; name[i]; i++) fw.dev[i] = name[i];
     fw.dev[i] = 0;
+    fw.bfs = 0;
     if (K->blk(fw.dev, 0, 0, 1, s0) || s0[510] != 0x55 || s0[511] != 0xAA)
         return;
+    if (K->ver >= 9 && K->fsop)                     /* particion BFS: la escribe el kernel */
+        for (i = 0; i < 4; i++)
+            if (s0[0x1BE + 16 * i + 4] == 0xB0) {
+                fw.bfs = 1;
+                fw.ok = 1;
+                return;
+            }
     for (i = 0; i < 4; i++) {
         const u8 *e = s0 + 0x1BE + 16 * i;
         if ((e[4] == 4 || e[4] == 6 || e[4] == 0x0E) && *(const u32 *)(e + 8)) { part = *(const u32 *)(e + 8); break; }
@@ -262,6 +294,8 @@ static int fw_save_in(const char *dir11, const char *name, const u8 *data, u32 s
 {
     u8 nm[11], *e; u32 d, lba, n, first = 0, old = 0, nc, c, off;
     int found;
+    if (fw.ok && fw.bfs)
+        return fw_bfs_save(dir11, name, data, size);
     if (!fw.ok || !name11(name, nm))
         return 1;
     d = fw_root_dir((const u8 *)dir11);
@@ -302,6 +336,11 @@ static int fw_save(const char *name, const u8 *data, u32 size) { return fw_save_
 static int fw_delete(const char *name)
 {
     u8 nm[11], *e; u32 d, lba, n, first;
+    if (fw.ok && fw.bfs) {
+        char sp[64];
+        fw_bspec(sp, "APPS       ", name);
+        return K->fsop(FSOP_REMOVE, sp, 0, 0, 0) ? 2 : 0;
+    }
     if (!fw.ok || !name11(name, nm))
         return 1;
     d = fw_apps_dir();

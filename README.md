@@ -100,6 +100,7 @@ PKG, INSTALL) se compila para 32 bits.
 | `irq.c` | interrupciones: IDT, TSS (pila IST), PIC, PIT a 1000 Hz, `hlt` al esperar, preempción de tareas, pantalla de error, BIOS con su PIC/IVT |
 | `bmg.c` | BMG, motor de juegos de BASIC: sprites con fondo guardado, `FRAME`, `HIT`; `KEYDOWN` sale de `kbd.c` |
 | `tools/bmg/` | juegos de ejemplo en BASIC para la tienda (`cometas.bas` -> `store/COMETAS.BIN`, `make juegos`) |
+| `bfs.c`, `bfs.h` | BFS, el sistema de archivos de BASIC-OS (kernel y `tools/mkbfs`): bloques de 64 bits, nombres largos, tramos, diario |
 | `ram.c` | Bancos de RAM de 32 MB (`K->ram`, comando `RAM`) y mapeo de toda la RAM sobre 1 GB |
 | `kbd.c` | Teclado PS/2 (set 1) con tres distribuciones: ES (España), LA (latinoamericana) y US. Se elige al arrancar con las flechas o con `KEYB`; sin teclas muertas. Letras en MAYÚSCULAS; Shift o Bloq Mayús = minúsculas. Cursor parpadeante |
 | `lib.c` | `memset`, `memcpy`, `memmove`, `memcmp`, `strlen` |
@@ -180,7 +181,7 @@ unidades y `SYS:`, entra en carpetas FAT/ISO, abre `.BAS` en BASIC, `.ICB` como 
 luego `RUN`, W/S mueven. `LOCATE col,fila` mueve el cursor de texto.
 
 **/SYS:** el escritorio, las apps, los iconos y el Pong de texto **no están en el kernel**: son archivos dentro
-de la imagen (sectores 232-511, de solo lectura), que el kernel carga como módulos (`GUI.SYS`, `*.APP`) con
+de la imagen (sectores 312-511 y, si no cabe, 2760-2879; de solo lectura), que el kernel carga como módulos (`GUI.SYS`, `*.APP`) con
 una tabla de funciones (`kapi.h`). `DIR "SYS:"` los lista. Se arman con `tools/mksys.py` al construir la imagen.
 **Iconos `.icb`** (ICono de BASIC-OS): texto; primera línea `ICB`, luego una fila por línea con un dígito hex por
 bloque (color del C64 0-F) y `.` para transparente (hasta 24x24). Pon el tuyo en `icons/` y se incluye.
@@ -276,21 +277,66 @@ salen en mayuscula: para minusculas en la cadena usa Shift (o escribe en la cons
 > Resumen de las ultimas novedades: [`docs/NOVEDADES.md`](docs/NOVEDADES.md)
 
 ## Instalar (INSTALL)
+`INSTALL` (o `EXEC "INSTALL.APP"`) copia BASIC-OS a otro disco, o al mismo USB del que arrancaste: primero carga todo
+el sistema a la RAM y luego escribe.
 
-`INSTALL` (o `EXEC "INSTALL.APP"`) copia el sistema del disco de arranque a otro disco, o al mismo USB:
+1. Elige el disco destino (lo ves con `DRIVES`).
+2. Elige el sistema de archivos:
+   - **1) BFS** (Enter): el de BASIC-OS. Usa todo el disco (10 GB, 1 TB...), nombres largos con carpetas, y no se rompe si
+     se va la luz a media escritura. Ver [BFS](#bfs-el-sistema-de-archivos-de-basic-os).
+   - **2) FAT16**: el de siempre. Máximo ~2 GB y nombres 8.3, pero lo pueden leer Linux (BASHTERM monta la partición FAT
+     en `/mnt`) y otras computadoras.
+3. Escribe el nombre del disco para confirmar (`HD1`). Se copian el arranque, el kernel, /SYS y todos los archivos
+   (DOOM, COSMOS, NET.BIN, Linux, HUB.CFG, tus programas de `APPS`, `VIDEOS`...), se releen y se comparan. El sector de
+   arranque se escribe al final: el disco solo arranca si todo llegó bien.
 
-1. Lee a RAM los primeros 4096 sectores (arranque, stage2, kernel, /SYS) y toda la particion FAT16: archivos, carpetas y nombres largos.
-   Como ya esta todo en memoria, el destino puede ser el mismo USB del que arrancaste.
-2. Crea una tabla de particiones con una particion FAT16 llamada **BASIC-OS FS**, con el tamano de cluster que le toque al disco
-   (hasta ~2 GB de particion), y recoloca los archivos.
-3. Escribe primero la particion, luego el kernel y al final el sector 0; cada bloque se relee y se compara.
-
-Pide el numero del disco y que escribas su nombre (por ejemplo `HD1`) antes de borrar nada. Solo escribe en discos que ve la BIOS
-(INT 13h): un USB de arranque lo es; el USB nativo (EHCI) y los CD no. Hace falta RAM hasta ~200 MB (QEMU: `-m 256`).
-Probado en QEMU: disco vacio, y el mismo disco con subcarpetas y nombres largos (sha256 de todos los archivos iguales).
-**Pruebalo primero en una memoria USB, no en el SSD con tu Linux.**
+Solo se escriben discos que ve la BIOS (un USB de arranque sí; el USB nativo (EHCI) y los CD no). Se instala la versión con
+la que arrancaste (desde la imagen super, la de 64 bits). Hace falta RAM para todo el sistema (QEMU: `-m 512`).
+Probado en QEMU: un disco de 10 GB con BFS (arranca, PKG baja programas a `APPS/`, se cortó la máquina a media copia y el
+disco quedó bien) y FAT16 en disco vacío y en el mismo disco. **Pruébalo primero en una memoria USB, no en el SSD con tu Linux.**
 
 > HTTPS con Render: Render manda la raiz "GTS Root R4" con firma cruzada de GlobalSign; iPXE solo reconoce raices por huella, asi que `tools/net/build.sh` aplica `x509-cross-signed-roots.patch` (acepta un certificado cuyo nombre y llave publica coinciden con una raiz de confianza). Probado en QEMU con una cadena igual a la de Render.
+
+## BFS: el sistema de archivos de BASIC-OS
+BFS (BASIC-OS File System, `bfs.h`/`bfs.c`) es el formato propio de BASIC-OS para discos. El mismo código va en el kernel y
+en la herramienta de Linux `tools/mkbfs`.
+
+- **Sin límite práctico de tamaño:** bloques de 4 KB con números de 64 bits. Un disco de 10 GB se usa entero.
+- **Nombres largos** (hasta 255 bytes, UTF-8), con mayúsculas y minúsculas, y carpetas sin límite. Al buscar no importan las
+  mayúsculas: BASIC escribe todo en mayúsculas y `LOAD "HD0.1:/JUEGOS/MI JUEGO.BAS"` encuentra `Mi juego.bas`.
+- **Archivos por tramos (extents):** un video de 30 MB queda en uno o dos tramos seguidos (12 en el inodo y hasta 255 más).
+- **Diario de metadatos:** cada operación (guardar, crear carpeta, borrar, renombrar) junta los bloques de control que cambia;
+  primero escribe los datos, luego las copias al diario, luego la cabecera con su suma, y al final cada bloque a su lugar.
+  Si se va la luz a la mitad, al montar se repite lo que quedó en el diario: queda lo viejo o lo nuevo, nunca un disco roto.
+  `make bfs-test` lo prueba con miles de operaciones al azar y cortes simulados en cualquier punto, revisando todo después.
+- **Partición tipo `0xB0`** en la tabla del MBR, desde el sector 4096 (antes van el arranque, el kernel y /SYS).
+
+Desde BASIC (además de `DIR`, `TYPE`, `LOAD`, `PLAY`... que leen igual que en FAT):
+
+| Comando | Qué hace |
+|---|---|
+| `SAVE "HD0.1:/JUEGOS/MI JUEGO.BAS"` | guarda el programa en el disco (sin `:` sigue yendo a las ranuras de `SAVE` de siempre) |
+| `MKDIR "HD0.1:/JUEGOS"` | crea una carpeta (`RMDIR` la borra si está vacía) |
+| `CP "HD0.1:/A.BVC","HD0.1:/VIDEOS/B.BVC"` | copia (el origen puede ser FAT, CD o BFS; el destino, BFS) |
+| `MV "HD0.1:/A","HD0.1:/VIDEOS"` | renombra o mueve dentro del mismo disco (a una carpeta que existe: adentro) |
+| `SCRATCH "HD0.1:/A"` (o `RM`) | borra un archivo o una carpeta vacía |
+
+`DIR` de un disco BFS termina con los MB libres. Los programas usan `K->fsop` (kapi v9: escribir, carpeta, borrar, renombrar,
+espacio libre, dar formato); PKG, BCC y COSMOS guardan en `APPS/` y `VIDEOS/` igual en BFS que en FAT.
+
+Desde Linux (`tools/mkbfs`, lo compila `make`):
+
+```sh
+tools/mkbfs nuevo disco.img 10240 --arranque pc-basic.img   # disco de 10 GB que arranca BASIC-OS, todo BFS
+tools/mkbfs meter disco.img ../video-prueba /VIDEOS         # una carpeta entera (o un archivo)
+tools/mkbfs ls disco.img /VIDEOS
+tools/mkbfs sacar disco.img /JUEGOS/MI\ JUEGO.BAS .          # sacar archivos o carpetas
+tools/mkbfs mkdir | rm | mv | info | revisar disco.img ...
+make bfs HUB_URL=https://... HUB_KEY=...                    # basic-os-bfs.img (BFS_MB=1024) con DOOM, COSMOS, Linux, NET...
+```
+
+Lo que todavía no se puede: Linux (BASHTERM) arranca desde un disco BFS pero no lo monta en `/mnt` (sigue buscando una
+partición FAT), y el escritorio aún no muestra nombres largos con acentos (la fuente es de 8 bits).
 
 ## Atajos para gente de UNIX/Linux
 `LS` = `DIR`, `CAT`/`MORE`/`LESS` = `TYPE`, `RM` = `SCRATCH`, `CLEAR` = `CLS`, `MAN` = `HELP`, `LSBLK`/`DF` = `DRIVES`,

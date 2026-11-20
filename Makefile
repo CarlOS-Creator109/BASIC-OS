@@ -10,7 +10,7 @@
 #   make test     prueba el interprete en el host (sin arrancar el SO)
 #   make clean
 
-KSECT   := 224                       # sectores reservados para el kernel (112 KB); max 226 (/SYS empieza en el LBA 232)
+KSECT   := 300                       # sectores reservados para el kernel (150 KB); max 306 (/SYS empieza en el LBA 312)
 # ARCH=64 (por defecto): PC BASIC de 64 bits.  ARCH=32: variante de 32 bits (modo protegido, sin paginacion);
 # corre en cualquier CPU i686 y en emuladores x86 de 32 bits (v86, en el navegador). 'make 32' la arma en build32/
 # con el mismo codigo, sin tocar los .o de 64 bits.
@@ -33,7 +33,7 @@ LIBO    := lib.o
 endif
 LDFLAGS := -m $(LDEMU) -z max-page-size=0x1000 -T linker.ld -nostdlib -z noexecstack --no-warn-rwx-segments
 
-OBJS := $(ENTRYO) kernel.o vga.o kbd.o $(LIBO) ram.o task.o irq.o bmg.o sysinfo.o basic.o store.o pci.o mouse.o bios.o blk.o fs.o mmio.o usb.o \
+OBJS := $(ENTRYO) kernel.o vga.o kbd.o $(LIBO) ram.o task.o irq.o bmg.o bfs.o sysinfo.o basic.o store.o pci.o mouse.o bios.o blk.o fs.o mmio.o usb.o \
         hda.o ac97.o audio.o atapi.o cd.o sys.o module.o fb.o
 
 # todas las versiones; la de video solo si hay un .BVC (make VIDEO=mi.bvc)
@@ -65,12 +65,12 @@ entry32.o: entry32.asm thunk32.bin
 entry.o: entry.asm thunk.bin
 	nasm -f elf64 $< -o $@
 
-%.o: %.c kernel.h basic.h store.h fs.h kapi.h audio.h cd.h sys.h module.h
+%.o: %.c kernel.h basic.h store.h fs.h kapi.h audio.h cd.h sys.h module.h bfs.h
 	$(CC) $(CFLAGS) $(if $(filter $@,$(KOS)),$(KOSFLAGS)) -c $< -o $@
 
 # drivers y codigo que corre poco se compilan con -Os para que el kernel quepa en KSECT (los gcc nuevos, como el
 # de Arch, hacen el codigo mas grande con -O2). Lo que corre siempre (BASIC, VGA, audio, teclado, reloj) sigue en -O2.
-KOS      := kernel.o sysinfo.o store.o pci.o mouse.o bios.o blk.o fs.o mmio.o usb.o hda.o ac97.o atapi.o cd.o sys.o module.o ram.o
+KOS      := bfs.o kernel.o sysinfo.o store.o pci.o mouse.o bios.o blk.o fs.o mmio.o usb.o hda.o ac97.o atapi.o cd.o sys.o module.o ram.o
 KOSFLAGS := -Os
 
 kernel.elf: $(OBJS) linker.ld
@@ -231,6 +231,30 @@ tools/mkbvc: tools/mkbvc.c
 	cc -O2 -o $@ $<
 tools/bvcplay: tools/bvcplay.c
 	cc -O2 -o $@ $< $$(pkg-config --cflags --libs sdl2)
+# ---- BFS (el sistema de archivos de BASIC-OS): herramienta de Linux, prueba y disco de arranque con BFS ----
+#   tools/mkbfs nuevo/meter/sacar/ls/mkdir/rm/mv/info/revisar (ver tools/mkbfs.c)
+#   make bfs-test       operaciones al azar + apagones simulados a media escritura, con fsck
+#   make bfs            basic-os-bfs.img: disco que arranca con todo en una particion BFS (BFS_MB, por defecto 1024)
+tools/mkbfs: tools/mkbfs.c bfs.c bfs.h
+	cc -O2 -Wall -I. -DBFS_HOST -o $@ tools/mkbfs.c bfs.c
+tools/bfstest: tools/bfstest.c bfs.c bfs.h
+	cc -O2 -Wall -I. -DBFS_HOST -o $@ tools/bfstest.c bfs.c
+bfs-test: tools/bfstest
+	for s in 1 2 3; do tools/bfstest $$s || exit 1; done
+BFS_MB ?= 1024
+basic-os-bfs.img: pc-basic.img DOOM.BIN COSMOS.BIN tools/mkbfs $(WAD) store/COMETAS.BIN
+	rm -f $@
+	tools/mkbfs nuevo $@ $(BFS_MB) --arranque pc-basic.img --etiqueta BASIC-OS
+	for f in DOOM.BIN COSMOS.BIN $(WAD) tools/linux/BZIMAGE tools/linux/INITRD.GZ; do tools/mkbfs meter $@ $$f / > /dev/null; done
+	tools/mkbfs mv $@ /$(notdir $(WAD)) /$(shell echo $(notdir $(WAD)) | tr a-z A-Z)
+	[ ! -f tools/net/NET.BIN ] || tools/mkbfs meter $@ tools/net/NET.BIN / > /dev/null
+	[ -z "$(HUB_URL)" ] || { { echo "$(HUB_URL)"; [ -z "$(HUB_KEY)" ] || echo "$(HUB_KEY)"; } > HUB.CFG; tools/mkbfs meter $@ HUB.CFG / > /dev/null; }
+	tools/mkbfs mkdir $@ /APPS && tools/mkbfs meter $@ store/COMETAS.BIN /APPS > /dev/null
+	tools/mkbfs mkdir $@ /VIDEOS
+	tools/mkbfs revisar $@
+	@echo "Imagen lista: $@  (QEMU: qemu-system-x86_64 -drive format=raw,file=$@ -m 512 -nic user,model=e1000)"
+bfs: basic-os-bfs.img
+
 # make videos VIDEOS=carpeta: cada video de la carpeta sale en videos/ como NOMBRE.BVC (PLAY), NOMBRE.MP4 (MPLAY) y
 # NOMBRE.TXT (titulo) para la pagina de videos del hub: se copia a la carpeta videos/ del repo. BVCOPTS = opciones de mkbvc.
 VIDEOS  ?= ../video-prueba
@@ -312,10 +336,10 @@ test:
 
 clean:
 	rm -rf build32 pc-basic32.img build-super super-basicos.img $(SUPERDIR)/*.bin
-	rm -f tools/mkbashimg tools/mkbvc tools/bvcplay
+	rm -f tools/mkbashimg tools/mkbvc tools/bvcplay tools/mkbfs tools/bfstest basic-os-bfs.img
 	rm -f $(CMDIR)/*.o $(CMDIR)/cosmos.elf COSMOS.BIN
 	rm -f $(B2B)/*.o $(B2B)/*.elf $(B2B)/*.bin $(B2B)/b2b_blobs.h $(B2B)/bas2bin
 	rm -f *.o *.elf *.bin pc-basic.img pc-basic-doom.img $(SYSDIR)/*.o $(SYSDIR)/*.elf $(SYSDIR)/*.SYS $(SYSDIR)/*.APP apps/*.o apps/*.elf
 	$(MAKE) -C test clean
 
-.PHONY: all 64 32 doom video videos super bas2bin juegos run run32 test clean store net
+.PHONY: all 64 32 doom video videos bfs bfs-test super bas2bin juegos run run32 test clean store net

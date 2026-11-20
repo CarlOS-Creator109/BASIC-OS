@@ -357,6 +357,7 @@ static int build_fs(void)
 
 /* ---- escribir con verificacion ---- */
 static u32 written_mb;
+static int use_bfs;
 static int wr(const char *name, u32 lba, u32 n, const u8 *src)
 {
     while (n) {
@@ -428,6 +429,155 @@ static int do_write(const char *tn, u32 tsect)
     return 1;
 }
 
+/* ================= instalar sobre BFS (el sistema de archivos de BASIC-OS) =================
+ * Los archivos se leen con K->dir / K->read (el origen puede ser FAT o BFS: lo entiende el kernel) y se escriben con
+ * K->fsop (kapi v9). Todo se carga a RAM antes de escribir nada, asi que tambien sirve sobre el mismo disco. */
+#define FL_MAX   4096
+struct fl { char path[232]; u32 size, isdir; u64 addr, pad; };   /* 256 bytes */
+#define P_LIST   ((struct fl *)(IB + 0x300000UL))   /* 4096 x 256 B = 1 MB (hasta P_IMG) */
+static int nfl, fl_err;
+static u8 *fl_next;
+static u64 fl_bytes;
+static char cur_dir[232];
+static u64 fl_bank;                             /* bancos de RAM con los archivos (kapi >= 7) */
+
+static int slen(const char *s) { int n = 0; while (s[n]) n++; return n; }
+static void scat(char *d, int max, const char *a)
+{
+    int n = slen(d), i;
+    for (i = 0; a[i] && n < max - 1; i++) d[n++] = a[i];
+    d[n] = 0;
+}
+static void mkspec(char *out, int max, const char *dev, const char *path)
+{
+    out[0] = 0;
+    scat(out, max, dev);
+    scat(out, max, ".1:");
+    scat(out, max, path[0] == '/' ? "" : "/");
+    scat(out, max, path);
+}
+static void fl_cb(const char *name, unsigned size, int isdir)
+{
+    struct fl *f;
+    if ((name[0] == '.' && (!name[1] || (name[1] == '.' && !name[2]))))
+        return;
+    if (nfl >= FL_MAX || slen(cur_dir) + slen(name) + 2 >= (int)sizeof f->path) { fl_err = 1; return; }
+    f = &P_LIST[nfl++];
+    f->path[0] = 0;
+    scat(f->path, sizeof f->path, cur_dir);
+    scat(f->path, sizeof f->path, "/");
+    scat(f->path, sizeof f->path, name);
+    f->size = size;
+    f->isdir = isdir != 0;
+    f->addr = 0;
+}
+/* recorre la particion del origen y carga cada archivo a RAM */
+static int bfs_collect(void)
+{
+    char spec[300];
+    int i;
+    nfl = 0; fl_err = 0; fl_bytes = 0; cur_dir[0] = 0;
+    mkspec(spec, sizeof spec, sname, "/");
+    if (K->dir(spec, fl_cb) < 0)
+        return 1;                                   /* el origen no tiene particion: se instala vacia */
+    for (i = 0; i < nfl; i++)
+        if (P_LIST[i].isdir) {
+            int k;
+            for (k = 0; P_LIST[i].path[k]; k++) cur_dir[k] = P_LIST[i].path[k];
+            cur_dir[k] = 0;
+            mkspec(spec, sizeof spec, sname, cur_dir);
+            if (K->dir(spec, fl_cb) < 0) { fail("no pude leer una carpeta del origen"); return 0; }
+        }
+    if (fl_err) { fail("el origen tiene demasiados archivos o rutas muy largas"); return 0; }
+    fl_next = P_IMG;
+    if (K->ver >= 7 && K->ram) {                    /* los archivos van en bancos de RAM: nadie mas los pisa */
+        u64 need = 0x100000, big = 0, bank;
+        unsigned nb;
+        for (i = 0; i < nfl; i++)
+            if (!P_LIST[i].isdir) {
+                need += (P_LIST[i].size + 15) & ~15u;
+                if (P_LIST[i].size > big) big = P_LIST[i].size;
+            }
+        need += big;                                /* para releer y comparar */
+        bank = K->ram(RAM_INFO, 0, 2, 0);
+        nb = (unsigned)((need + bank - 1) / bank);
+        fl_bank = K->ram(RAM_ALLOC, 0, nb, "INSTALL");
+        if (!fl_bank) { fail("no hay RAM libre para copiar el sistema (usa mas memoria)"); return 0; }
+        fl_next = (u8 *)(unsigned long)fl_bank;
+        img_limit = fl_next + (u64)nb * bank;
+    }
+    for (i = 0; i < nfl; i++) {
+        struct fl *f = &P_LIST[i];
+        unsigned total = 0;
+        int r;
+        if (f->isdir) continue;
+        if (fl_next + f->size + 16 > img_limit) { fail("el sistema no cabe en la RAM (usa mas memoria)"); return 0; }
+        mkspec(spec, sizeof spec, sname, f->path);
+        r = K->read(spec, (char *)fl_next, (int)f->size, &total);
+        if (r < 0 || (unsigned)r != f->size) { pr("\n"); pr(spec); fail(": no pude leerlo"); return 0; }
+        f->addr = (u64)(unsigned long)fl_next;
+        fl_next += (f->size + 15) & ~15u;
+        fl_bytes += f->size;
+        files_n++;
+    }
+    for (i = 0; i < nfl; i++) if (P_LIST[i].isdir) dirs_n++;
+    return 1;
+}
+
+static int bfs_install(const char *tn, u32 tsect)
+{
+    static u8 mbr[512];
+    char spec[300];
+    u32 i, psect = tsect - PSTART;
+    u8 *e;
+    int r;
+    u64 done = 0, next_dot = 0;
+    written_mb = 0;
+    pr("Escribiendo el sistema (arranque, kernel y /SYS) ");
+    if (head_n > 1 && !wr_or_fail(tn, 1, head_n - 1, P_HEAD + 512, "el kernel"))
+        return 0;
+    /* tabla de particiones (sin codigo de arranque todavia: el disco solo arranca si todo llega bien) */
+    memset(mbr, 0, sizeof mbr);
+    e = mbr + 0x1BE;
+    e[0] = 0x80; e[1] = 0xFE; e[2] = 0xFF; e[3] = 0xFF; e[4] = 0xB0; e[5] = 0xFE; e[6] = 0xFF; e[7] = 0xFF;
+    *(u32 *)(e + 8) = PSTART; *(u32 *)(e + 12) = psect;
+    mbr[510] = 0x55; mbr[511] = 0xAA;
+    if (!wr_or_fail(tn, 0, 1, mbr, "la tabla de particiones"))
+        return 0;
+    pr("\nDando formato BFS ");
+    mkspec(spec, sizeof spec, tn, "");
+    spec[slen(spec) - 1] = 0;                       /* "HD1.1:" */
+    if ((r = K->fsop(FSOP_FORMAT, spec, "BASIC-OS", 0, 0))) { prnum((u32)-r); fail(" no pude dar formato BFS"); return 0; }
+    pr("\nCopiando "); prnum(files_n); pr(" archivos ");
+    for (i = 0; i < (u32)nfl; i++) {
+        struct fl *f = &P_LIST[i];
+        mkspec(spec, sizeof spec, tn, f->path);
+        r = f->isdir ? K->fsop(FSOP_MKDIR, spec, 0, 0, 0)
+                     : K->fsop(FSOP_WRITE, spec, (const void *)(unsigned long)f->addr, f->size, 0);
+        if (r) { pr("\n"); pr(spec); fail(r == -8 ? ": el disco se lleno" : ": no pude escribirlo"); return 0; }
+        done += f->size;
+        if (done >= next_dot) { pr("."); next_dot = done + 4ull * 1024 * 1024; }
+    }
+    pr("\nComprobando ");
+    for (i = 0; i < (u32)nfl; i++) {                /* releer cada archivo y compararlo con lo de la RAM */
+        struct fl *f = &P_LIST[i];
+        unsigned total = 0;
+        if (f->isdir) continue;
+        if (fl_next + f->size > img_limit) break;   /* sin RAM para releer este: confiar en el diario */
+        mkspec(spec, sizeof spec, tn, f->path);
+        r = K->read(spec, (char *)fl_next, (int)f->size, &total);
+        if (r < 0 || (unsigned)r != f->size || !same(fl_next, (const u8 *)(unsigned long)f->addr, f->size)) {
+            pr("\n"); pr(spec); fail(": lo leido no coincide con lo escrito");
+            return 0;
+        }
+    }
+    /* sector 0 con el arranque: ahora si */
+    memcpy(mbr, P_HEAD, 0x1BE);
+    if (!wr_or_fail(tn, 0, 1, mbr, "el sector de arranque"))
+        return 0;
+    return 1;
+}
+
 int mod_main(const struct kapi *k)
 {
     char line[16];
@@ -465,12 +615,40 @@ int mod_main(const struct kapi *k)
     if (ti < 1 || ti > ndst) { fail("numero invalido"); return 1; }
     tn = drv[dst[ti - 1]].name;
     tsect = drv[dst[ti - 1]].sectors;
-    if (!geometry(tsect)) { fail("el disco destino es muy chico (minimo ~10 MB)"); return 1; }
+    use_bfs = K->ver >= 9 && K->fsop;
+    if (use_bfs) {
+        pr("\nSistema de archivos:\n");
+        pr("1) BFS   el de BASIC-OS: usa todo el disco, nombres largos, no se rompe si se va la luz (recomendado)\n");
+        pr("2) FAT16 el de siempre: maximo 2 GB, nombres cortos; lo pueden leer Linux (BASHTERM) y otras PCs\n");
+        pr("Elige (Enter = 1): ");
+        n = readline(line, sizeof line);
+        if (n < 0) { pr("Cancelado.\n"); return 0; }
+        use_bfs = !(n > 0 && line[0] == '2');
+    }
+    if (!use_bfs && !geometry(tsect)) { fail("el disco destino es muy chico (minimo ~10 MB)"); return 1; }
 
     img_limit = (u8 *)(unsigned long)ram_end();
     pr("\nCargando el sistema en RAM ...\n");
     load_head();
     if (head_n < 160 || sread(0, head_n, P_HEAD)) { fail("no pude leer el sistema del origen"); return 1; }
+    if (use_bfs) {
+        if (!bfs_collect()) { if (fl_bank) K->ram(RAM_FREE, fl_bank, 0, 0); return 1; }
+        pr("Listo en RAM: "); prnum(head_n / 2); pr(" KB de sistema, ");
+        prnum(files_n); pr(" archivos y "); prnum(dirs_n); pr(" carpetas ("); prnum((u32)(fl_bytes / 1024)); pr(" KB).\n");
+        pr("Se creara BFS de "); prmb(tsect - PSTART); pr(" en "); pr(tn); pr(".\n");
+        pr("\n!!! SE BORRARA TODO EL CONTENIDO DE "); pr(tn); pr(" !!!\nEscribe el nombre del disco para confirmar: ");
+        n = readline(line, sizeof line);
+        if (n <= 0 || !streq(line, tn)) { pr("Cancelado: no se escribio nada.\n"); return 0; }
+        pr("\nNo apagues ni saques el disco.\n");
+        if (!bfs_install(tn, tsect)) {
+            if (fl_bank) K->ram(RAM_FREE, fl_bank, 0, 0);
+            pr("\nLa instalacion NO termino. El disco puede haber quedado inservible: reinstala.\n");
+            return 1;
+        }
+        if (fl_bank) K->ram(RAM_FREE, fl_bank, 0, 0);
+        pr("\n\nInstalacion completa y verificada en "); pr(tn); pr(" (BFS).\nReinicia y arranca desde ese disco.\n");
+        return 0;
+    }
     have_fs = open_source_fs();
     if (!have_fs)
         pr("(el origen no tiene particion FAT16: se creara una vacia)\n");

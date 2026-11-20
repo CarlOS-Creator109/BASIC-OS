@@ -1,13 +1,68 @@
-/* fs.c - FAT12/16/32 e ISO9660, solo lectura, nombres 8.3 / ISO nivel 1. Sin libc. */
+/* fs.c - FAT12/16/32 e ISO9660 (solo lectura, nombres 8.3 / ISO nivel 1) y BFS (bfs.c: lectura y escritura,
+ * nombres largos). Sin libc. */
 #include "kernel.h"
 #include "fs.h"
 #include "sys.h"
+#include "kapi.h"
+#include "bfs.h"
 
 #define SECBUF 4096
 
 static struct blk *dev;
 static u32 part_lba;                    /* inicio de la particion (sectores del dispositivo) */
 static int is_iso;
+static int is_bfs;
+
+/* ---- BFS: el volumen montado y sus lecturas/escrituras por sectores ---- */
+static struct bfs kbfs;
+/* el diario necesita 512 KB: los ultimos del banco SISTEMA (0xB000000-0xC000000), que nadie mas usa. Fijo y no un
+ * banco aparte para no caer encima de la memoria de programas que usan direcciones fijas (INSTALL desde 0xC000000). */
+#define BFS_TXMEM 0xBF80000ull
+static int kb_io(int write, u64 lba, u32 n, u8 *p)
+{
+    while (n) {
+        u32 c = n > 32 ? 32 : n;
+        if (write ? blk_write(dev, (u64)part_lba + lba, (int)c, p) : blk_read(dev, (u64)part_lba + lba, (int)c, p))
+            return 1;
+        p += c * 512;
+        lba += c;
+        n -= c;
+    }
+    return 0;
+}
+static int kb_rd(void *ctx, u64 lba, u32 n, void *buf) { (void)ctx; return kb_io(0, lba, n, buf); }
+static int kb_wr(void *ctx, u64 lba, u32 n, const void *buf) { (void)ctx; return kb_io(1, lba, n, (u8 *)buf); }
+static int bfs_try(u32 lba0)
+{
+    part_lba = lba0;
+    if (dev->bps != 512)
+        return FS_EFMT;
+    kbfs.rd = kb_rd;
+    kbfs.wr = kb_wr;
+    if (!kbfs.tx && ram_ok(BFS_TXMEM + 0x80000ull - 1))  /* memoria para el diario (sin ella: solo leer) */
+        kbfs.tx = (u8 *)(unsigned long)BFS_TXMEM;
+    if (bfs_mount(&kbfs))
+        return FS_EFMT;
+    is_bfs = 1;
+    is_iso = 0;
+    return FS_OK;
+}
+static int bfs_err(int e)
+{
+    switch (e) {
+    case 0: return FS_OK;
+    case BFS_ENOENT: case BFS_ENOTDIR: return FS_ENOENT;
+    case BFS_EFMT: return FS_EFMT;
+    case BFS_ENOSPC: return FS_ENOSPC;
+    case BFS_EEXIST: return FS_EEXIST;
+    case BFS_EISDIR: return FS_EISDIR;
+    case BFS_ENOTEMPTY: return FS_ENOTEMPTY;
+    case BFS_ENAME: return FS_ENAME;
+    case BFS_E2BIG: return FS_E2BIG;
+    case BFS_EBUSY: return FS_EROFS;
+    }
+    return FS_EIO;
+}
 
 /* ---- FAT ---- */
 static u32 bpb_bps, spc, rsvd, nfats, fatsz, rootsecs, first_data, root_clus, nclusters;
@@ -305,6 +360,7 @@ static int mount_spec(const char *spec, const char **rest)
     if (di < 0)
         return FS_ENODEV;
     dev = blk_get(di);
+    is_bfs = 0;
     p = spec;
     (void)p;
 
@@ -316,11 +372,13 @@ static int mount_spec(const char *spec, const char **rest)
     part_lba = 0;
     if (blk_read(dev, 0, 1, mbr))
         return FS_EIO;
-    if (!part) {                                    /* sin particion: disquete o primera FAT */
+    if (!part) {                                    /* sin particion: disquete o primera FAT (o BFS) */
         if (fat_mount(0) == FS_OK)
             return FS_OK;
         for (i = 0; i < 4; i++) {
             u8 t = mbr[446 + i * 16 + 4];
+            if (t == BFS_PTYPE && mbr[510] == 0x55 && bfs_try(le32(mbr + 446 + i * 16 + 8)) == FS_OK)
+                return FS_OK;
             if ((t == 1 || t == 4 || t == 6 || t == 0xB || t == 0xC || t == 0xE) &&
                 fat_mount(le32(mbr + 446 + i * 16 + 8)) == FS_OK)
                 return FS_OK;
@@ -329,6 +387,8 @@ static int mount_spec(const char *spec, const char **rest)
     }
     if (part < 1 || part > 4 || mbr[510] != 0x55 || mbr[511] != 0xAA)
         return FS_EFMT;
+    if (mbr[446 + (part - 1) * 16 + 4] == BFS_PTYPE)
+        return bfs_try(le32(mbr + 446 + (part - 1) * 16 + 8));
     return fat_mount(le32(mbr + 446 + (part - 1) * 16 + 8));
 }
 
@@ -378,6 +438,13 @@ static int list_cb(const struct ent *e, void *ctx)
     return 0;
 }
 
+static int bfs_list_cb(void *ctx, const char *name, int nlen, u32 ino, int type, u64 size)
+{
+    (void)ctx; (void)nlen; (void)ino;
+    user_cb(name, size > 0xFFFFFFFFull ? 0xFFFFFFFFu : (unsigned int)size, type == BFS_T_DIR);
+    return 0;
+}
+
 static int is_sys(const char *spec, const char **rest)
 {
     if (up(spec[0]) == 'S' && up(spec[1]) == 'Y' && up(spec[2]) == 'S' && spec[3] == ':') {
@@ -406,12 +473,22 @@ int fs_dir(const char *spec, fs_cb cb)
     r = mount_spec(spec, &rest);
     if (r)
         return r;
+    user_cb = cb;
+    if (is_bfs) {
+        struct bfs_inode in;
+        u32 ino;
+        r = bfs_lookup(&kbfs, rest, &ino, &in);
+        if (r)
+            return bfs_err(r);
+        if (in.type != BFS_T_DIR)
+            return FS_ENOENT;
+        return bfs_err(bfs_list(&kbfs, ino, bfs_list_cb, NULL));
+    }
     r = resolve(rest, &e);
     if (r)
         return r;
     if (!e.dir)
         return FS_ENOENT;
-    user_cb = cb;
     return walk_dir(e.clus, e.size, list_cb, NULL);
 }
 
@@ -427,6 +504,19 @@ int fs_read(const char *spec, char *buf, int max, unsigned int *total)
     r = mount_spec(spec, &rest);
     if (r)
         return r;
+    if (is_bfs) {
+        struct bfs_inode in;
+        long long n;
+        r = bfs_lookup(&kbfs, rest, 0, &in);
+        if (r)
+            return bfs_err(r);
+        if (in.type == BFS_T_DIR)
+            return FS_EISDIR;
+        if (total)
+            *total = in.size > 0xFFFFFFFFull ? 0xFFFFFFFFu : (unsigned int)in.size;
+        n = bfs_read(&kbfs, &in, 0, buf, (u64)(in.size < (u64)(unsigned)max ? in.size : (u64)(unsigned)max));
+        return n < 0 ? FS_EIO : (int)n;
+    }
     r = resolve(rest, &e);
     if (r)
         return r;
@@ -485,4 +575,115 @@ int fs_read(const char *spec, char *buf, int max, unsigned int *total)
         }
     }
     return (int)got;
+}
+
+/* ---- escritura: solo BFS ---- */
+static int wmount(const char *spec, const char **rest)
+{
+    int r;
+    if (is_sys(spec, rest))
+        return FS_EROFS;
+    r = mount_spec(spec, rest);
+    if (r)
+        return r;
+    if (!is_bfs || !kbfs.tx)
+        return FS_EROFS;
+    return FS_OK;
+}
+
+int fs_write(const char *spec, const void *data, unsigned int size)
+{
+    const char *rest;
+    int r = wmount(spec, &rest);
+    return r ? r : bfs_err(bfs_write(&kbfs, rest, data, size));
+}
+
+int fs_mkdir(const char *spec)
+{
+    const char *rest;
+    int r = wmount(spec, &rest);
+    return r ? r : bfs_err(bfs_mkdir(&kbfs, rest));
+}
+
+int fs_remove(const char *spec)
+{
+    const char *rest;
+    int r = wmount(spec, &rest);
+    return r ? r : bfs_err(bfs_remove(&kbfs, rest));
+}
+
+int fs_rename(const char *spec, const char *to)
+{
+    const char *rest;
+    int r = wmount(spec, &rest), i;
+    if (r)
+        return r;
+    for (i = 0; to[i]; i++)                         /* "HD0.1:/NUEVO" o "/NUEVO": la unidad no cambia */
+        if (to[i] == ':') {
+            to += i + 1;
+            break;
+        }
+    return bfs_err(bfs_rename(&kbfs, rest, to));
+}
+
+int fs_space(const char *spec, unsigned long long *free_bytes, unsigned long long *total_bytes)
+{
+    const char *rest;
+    int r = mount_spec(spec, &rest);
+    if (r)
+        return r;
+    if (!is_bfs) {
+        if (free_bytes) *free_bytes = 0;
+        if (total_bytes) *total_bytes = 0;
+        return FS_EROFS;
+    }
+    if (free_bytes) *free_bytes = kbfs.sb.free_blocks * BFS_BS;
+    if (total_bytes) *total_bytes = (kbfs.sb.nblocks - kbfs.sb.data_start) * BFS_BS;
+    return FS_OK;
+}
+
+const char *fs_kind(void)
+{
+    if (is_bfs) return "BFS";
+    if (is_iso) return "ISO9660";
+    return fat_type == 32 ? "FAT32" : (fat_type == 16 ? "FAT16" : "FAT12");
+}
+
+/* da formato BFS a la particion N del disco (su tipo en el MBR tiene que ser 0xB0): "HD1.1:" */
+int fs_format(const char *spec, const char *label)
+{
+    int n = 0, len, part = 0, di, i;
+    u8 mbr[512];
+    u32 start, size;
+    while (spec[n] && spec[n] != ':')
+        n++;
+    len = n;
+    for (i = 0; i < n; i++)
+        if (spec[i] == '.') {
+            len = i;
+            part = spec[i + 1] - '0';
+            break;
+        }
+    if (part < 1 || part > 4)
+        return FS_ENOENT;
+    di = blk_find(spec, len);
+    if (di < 0)
+        return FS_ENODEV;
+    dev = blk_get(di);
+    if (dev->bps != 512 || blk_read(dev, 0, 1, mbr) || mbr[510] != 0x55 || mbr[511] != 0xAA ||
+        mbr[446 + (part - 1) * 16 + 4] != BFS_PTYPE)
+        return FS_EFMT;
+    start = le32(mbr + 446 + (part - 1) * 16 + 8);
+    size = le32(mbr + 446 + (part - 1) * 16 + 12);
+    part_lba = start;
+    kbfs.rd = kb_rd;
+    kbfs.wr = kb_wr;
+    if (!kbfs.tx && ram_ok(BFS_TXMEM + 0x80000ull - 1))
+        kbfs.tx = (u8 *)(unsigned long)BFS_TXMEM;
+    if (!kbfs.tx)
+        return FS_ENOSPC;
+    i = bfs_mkfs(&kbfs, size, label);
+    if (i)
+        return bfs_err(i);
+    return bfs_err(bfs_mount(&kbfs));
 }
