@@ -282,7 +282,7 @@ BN "mac"                                    enciende la tarjeta y muestra su MAC
 BN "ping 10.0.2.2"                          ping (ICMP)
 BN "dns ejemplo.com"                        resuelve el nombre a IP
 BN "get http://10.0.2.2:8080/hola.txt"      baja la página por HTTP y la muestra (hasta 4 KB en pantalla)
-BN "get https://10.0.2.2:8443/"             igual pero por HTTPS, con el TLS 1.3 propio (ver abajo)
+BN "get https://10.0.2.2:8443/"             igual pero por HTTPS, con TLS 1.3 propio y verificación de certificado
 ```
 
 Probado en QEMU (`-nic user,model=e1000`): DHCP da 10.0.2.15, el ping responde 4/4, `dns example.com` devuelve su IP, y
@@ -302,13 +302,39 @@ Probado en QEMU (`-nic user,model=e1000`): DHCP da 10.0.2.15, el ping responde 4
   `BN "get https://..."` hace el handshake y baja la página descifrada. Suite `TLS_AES_128_GCM_SHA256`, grupo X25519.
   **Falta la 3c:** todavía NO se verifica el certificado del servidor, así que el canal va cifrado pero **no autenticado**
   (vulnerable a un intermediario). Por eso BN avisa en pantalla y PKG/FORO siguen usando iPXE (`NET`) para el hub real.
-- **3c:** parsear el certificado X.509, verificar la firma (ECDSA P-256 / RSA-PSS) y la cadena hasta una raíz de confianza.
+- **3c (hecho):** verificar el certificado, todo en C puro:
+  - **X.509 / ASN.1 (DER)** (`tools/bn/x509.c`): parsea el cert, saca la clave pública, la firma, el emisor/sujeto y el SAN.
+  - **Firmas:** **ECDSA P-256** (aritmética de 256 bits propia) y **RSA** (PKCS#1 v1.5 y PSS, con modexp de exponente público),
+    más **SHA-384/512**. Probado con vectores (FIPS, RFC 6979) en `make bn-crypto-test`, y contra **certificados reales**
+    (`make bn-x509-test`): parseo, cadena y nombre.
+  - En el handshake BN verifica el **CertificateVerify** (la firma del servidor sobre el transcript), la **cadena** hasta una
+    **raíz de confianza** y el **nombre del host**. Las raíces van en `HD0.1:/ROOTS.DER` (certs DER concatenados; `make roots`
+    las saca de un bundle PEM). Si el cert no es de fiar, BN **cancela**. Si no hay `ROOTS.DER`, avisa (cifrado pero sin verificar).
+  - Probado end-to-end: `tls.c`/`crypto.c` bajaron el HTML real de la Wikipedia del Commodore 64 por HTTPS **con el certificado
+    verificado contra la raíz**, y rechazan una raíz equivocada. Y dentro de QEMU, `BN "get https://..."` con `ROOTS.DER` en el
+    disco dice "certificado verificado".
 
-**La MAC IMBOS (secretito):** BN no manda con la MAC de fábrica, sino con una firma propia "IMBOS" (*soy BOS*) mezclada
-(XOR) con la MAC real y forzada a ser unicast de administración local. `BN` muestra las dos (`MAC real` y `MAC IMBOS`).
+## BNM (BOS Net Manager): la red pasa por aquí
+`BNM` es el gestor de red: en vez de llamar a una pila concreta, la red pasa por BNM, que **decide**:
+1. Si **BN da servicio** (hay tarjeta e1000 y DHCP responde), sirve la petición con BN (HTTP/HTTPS con TLS propio y verificado).
+2. Si BN no da servicio (sin tarjeta, sin DHCP/enlace, o no pudo con esa petición), **pasa a iPXE** (`NET.BIN`) de reserva.
+3. Si iPXE tampoco puede (no está `NET.BIN` o también falla), da `SIN CONEXION - Cable o Red?`.
 
-Mientras tanto iPXE (`NET`, abajo) se queda como la opción para **HTTPS**, así PKG, FORO y COSMOS siguen con Render y
-GitHub hasta que BN sepa cifrar. Todavía no hay Wi-Fi: BN es por cable / QEMU.
+```
+BNM "get http://10.0.2.2:8080/x"      la baja por BN; si BN no puede, por iPXE; si no, error de conexión
+BNM "get https://servidor/x"          igual, con TLS propio cuando va por BN
+```
+El fallback a iPXE usa el mismo buzón que PKG (`bosstash` -> memoria fija), así la respuesta vuelve igual. Probado en QEMU:
+con tarjeta sirve por BN (`[BNM: servido por BN]`); con `-nic none` no hay BN ni iPXE y da `SIN CONEXION - Cable o Red?`.
+
+**BN es ahora la pila de red principal de BASIC-OS; iPXE queda de reserva.** BN hace DHCP, DNS, HTTP y HTTPS con TLS 1.3 propio
+y verificado, todo en C puro. iPXE (`NET`) **no se borra**: se queda como respaldo por si BN no soporta algo todavía (una curva o
+cifrado raro, Wi-Fi, o si falta `ROOTS.DER`). Lo que aún usa iPXE: **PKG, FORO y COSMOS** (el hub de Render y GitHub); migrarlos
+a BN es la última costura pendiente. Todavía no hay Wi-Fi: BN es por cable / QEMU.
+
+Nota de seguridad honesta: falta comprobar las **fechas de validez** del cert (BN no tiene reloj de red todavía) y la lista de
+revocación; y el generador de la clave efímera debería ser un CSPRNG más fuerte. Para un SO casero está muy bien, pero no es
+OpenSSL.
 
 ## Red (NET) — iPXE, por ahora para HTTPS
 `NET` carga `NET.BIN` (iPXE portado: drivers e1000/e1000e/rtl81xx/pcnet/virtio y muchos mas, TCP/IP, HTTP, **HTTPS**, DHCP, DNS, NTP, ping)

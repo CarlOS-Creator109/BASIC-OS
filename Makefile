@@ -152,14 +152,16 @@ DOOM.BIN: $(SYSDIR)/doom.o $(LIBO) mod.ld
 
 # ---- BN.BIN (BOS NET): la pila de red propia (e1000 + ARP/IP/UDP/ICMP/DHCP/DNS/TCP/HTTP, en C puro), modulo PCBM
 #      enlazado a 0x4000000. Va en la particion junto a NET.BIN; BN.APP la carga. iPXE (NET.BIN) sigue para HTTPS. ----
-tools/bn/bn.o: tools/bn/bn.c kapi.h mod_head.h tools/bn/tls.h tools/bn/crypto.h
+tools/bn/bn.o: tools/bn/bn.c kapi.h mod_head.h tools/bn/tls.h tools/bn/crypto.h tools/bn/x509.h
 	$(CC) $(filter-out -O2,$(CFLAGS)) -Os -I. -I tools/bn -c $< -o $@
 tools/bn/crypto.o: tools/bn/crypto.c tools/bn/crypto.h
 	$(CC) $(filter-out -O2,$(CFLAGS)) -Os -I tools/bn -c $< -o $@
-tools/bn/tls.o: tools/bn/tls.c tools/bn/tls.h tools/bn/crypto.h
+tools/bn/tls.o: tools/bn/tls.c tools/bn/tls.h tools/bn/crypto.h tools/bn/x509.h
 	$(CC) $(filter-out -O2,$(CFLAGS)) -Os -I tools/bn -c $< -o $@
-BN.BIN: tools/bn/bn.o tools/bn/crypto.o tools/bn/tls.o $(LIBO) mod.ld
-	$(MODLD) --defsym=MODBASE=0x4000000 tools/bn/bn.o tools/bn/crypto.o tools/bn/tls.o $(LIBO) -o tools/bn/bn.elf
+tools/bn/x509.o: tools/bn/x509.c tools/bn/x509.h tools/bn/crypto.h
+	$(CC) $(filter-out -O2,$(CFLAGS)) -Os -I tools/bn -c $< -o $@
+BN.BIN: tools/bn/bn.o tools/bn/crypto.o tools/bn/tls.o tools/bn/x509.o $(LIBO) mod.ld
+	$(MODLD) --defsym=MODBASE=0x4000000 tools/bn/bn.o tools/bn/crypto.o tools/bn/tls.o tools/bn/x509.o $(LIBO) -o tools/bn/bn.elf
 	objcopy -O binary tools/bn/bn.elf $@
 	@ls -l $@ | awk '{print "BN.BIN: " $$5 " bytes"}'
 
@@ -263,15 +265,25 @@ tools/bn/crypttest: tools/bn/crypttest.c tools/bn/crypto.c tools/bn/crypto.h
 	cc -O2 -I tools/bn -o $@ tools/bn/crypttest.c tools/bn/crypto.c
 bn-crypto-test: tools/bn/crypttest
 	tools/bn/crypttest
-tools/bn/tlstest: tools/bn/tlstest.c tools/bn/tls.c tools/bn/crypto.c tools/bn/tls.h tools/bn/crypto.h
-	cc -O2 -I tools/bn -o $@ tools/bn/tlstest.c tools/bn/tls.c tools/bn/crypto.c
+tools/bn/tlstest: tools/bn/tlstest.c tools/bn/tls.c tools/bn/crypto.c tools/bn/x509.c tools/bn/tls.h tools/bn/crypto.h tools/bn/x509.h
+	cc -O2 -I tools/bn -o $@ tools/bn/tlstest.c tools/bn/tls.c tools/bn/crypto.c tools/bn/x509.c
+tools/bn/x509test: tools/bn/x509test.c tools/bn/x509.c tools/bn/crypto.c tools/bn/x509.h tools/bn/crypto.h
+	cc -O2 -I tools/bn -o $@ tools/bn/x509test.c tools/bn/x509.c tools/bn/crypto.c
+bn-x509-test: tools/bn/x509test
+	@echo "uso: tools/bn/x509test hoja.der [intermedio.der raiz.der] [host]"
 bn-tls-test: tools/bn/tlstest
-	@echo "necesita un servidor TLS 1.3 en 127.0.0.1:8443 (ver tools/bn/README); luego: tools/bn/tlstest 127.0.0.1 8443 /"
+	@echo "necesita un servidor TLS 1.3 en 127.0.0.1:8443; luego: tools/bn/tlstest 127.0.0.1 8443 / raiz.der"
+# ROOTS.DER: raices de confianza para BN (certs DER concatenados), sacadas de un bundle PEM (CABUNDLE).
+CABUNDLE ?= /etc/ssl/certs/ca-certificates.crt
+ROOTS.DER:
+	@python3 tools/bn/mkroots.py "$(CABUNDLE)" $@
+roots: ROOTS.DER
 BFS_MB ?= 1024
 basic-os-bfs.img: pc-basic.img DOOM.BIN COSMOS.BIN BN.BIN tools/mkbfs $(WAD) store/COMETAS.BIN
 	rm -f $@
 	tools/mkbfs nuevo $@ $(BFS_MB) --arranque pc-basic.img --etiqueta BASIC-OS
 	for f in DOOM.BIN COSMOS.BIN BN.BIN $(WAD) tools/linux/BZIMAGE tools/linux/INITRD.GZ; do tools/mkbfs meter $@ $$f / > /dev/null; done
+	[ ! -f ROOTS.DER ] || tools/mkbfs meter $@ ROOTS.DER / > /dev/null
 	tools/mkbfs mv $@ /$(notdir $(WAD)) /$(shell echo $(notdir $(WAD)) | tr a-z A-Z)
 	[ ! -f tools/net/NET.BIN ] || tools/mkbfs meter $@ tools/net/NET.BIN / > /dev/null
 	[ -z "$(HUB_URL)" ] || { { echo "$(HUB_URL)"; [ -z "$(HUB_KEY)" ] || echo "$(HUB_KEY)"; } > HUB.CFG; tools/mkbfs meter $@ HUB.CFG / > /dev/null; }
@@ -335,6 +347,7 @@ build-super/completo64.img: pc-basic.img DOOM.BIN COSMOS.BIN BN.BIN tools/mkbfs 
 	rm -f $@
 	tools/mkbfs nuevo $@ $(SUPER_MB) --arranque pc-basic.img --etiqueta BASIC-OS
 	for f in DOOM.BIN COSMOS.BIN BN.BIN $(WAD) tools/linux/BZIMAGE tools/linux/INITRD.GZ $(wildcard $(VIDEO)); do tools/mkbfs meter $@ $$f / > /dev/null; done
+	[ ! -f ROOTS.DER ] || tools/mkbfs meter $@ ROOTS.DER / > /dev/null
 	tools/mkbfs mv $@ /$(notdir $(WAD)) /$(shell echo $(notdir $(WAD)) | tr a-z A-Z)
 	$(if $(wildcard $(VIDEO)),tools/mkbfs mv $@ /$(notdir $(VIDEO)) /$(shell echo $(notdir $(VIDEO)) | tr a-z A-Z))
 	[ ! -f tools/net/NET.BIN ] || tools/mkbfs meter $@ tools/net/NET.BIN / > /dev/null
@@ -381,10 +394,10 @@ test:
 
 clean:
 	rm -rf build32 pc-basic32.img build-super super-basicos.img $(SUPERDIR)/*.bin
-	rm -f tools/mkbashimg tools/mkbvc tools/bvcplay tools/mkbfs tools/bfstest tools/bn/crypttest tools/bn/tlstest basic-os-bfs.img BN.BIN tools/bn/bn.o tools/bn/crypto.o tools/bn/tls.o tools/bn/bn.elf
+	rm -f tools/mkbashimg tools/mkbvc tools/bvcplay tools/mkbfs tools/bfstest tools/bn/crypttest tools/bn/tlstest tools/bn/x509test basic-os-bfs.img BN.BIN ROOTS.DER tools/bn/bn.o tools/bn/crypto.o tools/bn/tls.o tools/bn/x509.o tools/bn/bn.elf
 	rm -f $(CMDIR)/*.o $(CMDIR)/cosmos.elf COSMOS.BIN
 	rm -f $(B2B)/*.o $(B2B)/*.elf $(B2B)/*.bin $(B2B)/b2b_blobs.h $(B2B)/bas2bin
 	rm -f *.o *.elf *.bin pc-basic.img pc-basic-doom.img $(SYSDIR)/*.o $(SYSDIR)/*.elf $(SYSDIR)/*.SYS $(SYSDIR)/*.APP apps/*.o apps/*.elf
 	$(MAKE) -C test clean
 
-.PHONY: all 64 32 doom video videos bfs bfs-test bn-crypto-test bn-tls-test super bas2bin juegos run run32 test clean store net
+.PHONY: all 64 32 doom video videos bfs bfs-test bn-crypto-test bn-tls-test bn-x509-test roots super bas2bin juegos run run32 test clean store net

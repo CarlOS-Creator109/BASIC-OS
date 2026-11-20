@@ -1770,7 +1770,7 @@ static void st_help(void)
     puts_("SOUND KICK|SNARE,HZ,MS  HIHAT,MS  OFF\n");
     puts_("SOUND DRUMKIT,HZ,KIT(0-3),MS  SNDWAIT\n");
     puts_("CDTOC CDPLAY [N] CDSTOP CDEJECT CDSTAT\n");
-    puts_("DESKTOP  YAAI  BASHTERM  TINYCORE  NET  BN  PKG  FORO  KEYB  RAM  TAREAS  INSTALL  PLAY \"X.BVC\"  SAY \"TEXTO\"  EXEC \"X.APP\"  LOAD \"\" = PONG\n");
+    puts_("DESKTOP  YAAI  BASHTERM  TINYCORE  NET  BN  BNM  PKG  FORO  KEYB  RAM  TAREAS  INSTALL  PLAY \"X.BVC\"  SAY \"TEXTO\"  EXEC \"X.APP\"  LOAD \"\" = PONG\n");
     puts_("LOCATE COL,ROW  (TEXT CURSOR)\n");
     puts_("UNIX = LS CAT RM CLEAR MAN... (ATAJOS PARA LINUX)\n");
     puts_("PCI = LIST PCI DEVICES\n");
@@ -2031,6 +2031,21 @@ static void exec_statement(void)
                 net_args[i] = spec[i];
             net_args[i] = 0;
         }
+        r = plat_exec("BN.APP");
+        if (r < 0)
+            exec_fail(r);
+    } else if (kw("BNM")) {
+        int r, i, j = 0;
+        const char *m = "@bnm ";
+        skip_ws();
+        while (m[j]) net_args[j] = m[j], j++;
+        if (*tp == '"') {
+            if (!get_spec())
+                return;
+            for (i = 0; spec[i] && j < (int)sizeof net_args - 1; i++)
+                net_args[j++] = spec[i];
+        }
+        net_args[j] = 0;
         r = plat_exec("BN.APP");
         if (r < 0)
             exec_fail(r);
