@@ -558,7 +558,12 @@ void audio_service(void)
         in_service = 0;
         return;
     }
-    if (g_tsc_hz) {                             /* no mas de ~2000 consultas por segundo */
+    if (irq_active()) {                         /* con reloj: una consulta por milisegundo del PIT como maximo */
+        static u64 last_tick = ~0ull;
+        if (irq_ticks == last_tick)
+            return;
+        last_tick = irq_ticks;
+    } else if (g_tsc_hz) {                      /* no mas de ~2000 consultas por segundo */
         u64 t = rdtsc();
         if (t < next_check)
             return;

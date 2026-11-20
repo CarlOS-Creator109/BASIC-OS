@@ -159,15 +159,21 @@ extern u64 g_tsc_hz;
 
 static void gui_tick(void)
 {
-    static u64 next;
+    static u64 next, next_ms;
     static int busy;
     u64 t;
     if (!g_gui_tick || busy)
         return;
-    t = rdtsc();
-    if (t < next)
-        return;
-    next = t + (g_tsc_hz ? g_tsc_hz : 2000000000ull) / 60;
+    if (irq_active()) {                 /* con reloj: 60 veces por segundo contadas en milisegundos del PIT */
+        if (irq_ticks < next_ms)
+            return;
+        next_ms = irq_ticks + 16;
+    } else {
+        t = rdtsc();
+        if (t < next)
+            return;
+        next = t + (g_tsc_hz ? g_tsc_hz : 2000000000ull) / 60;
+    }
     busy = 1;
     g_gui_tick();
     busy = 0;

@@ -375,6 +375,8 @@ BASIC-OS todavía no tiene procesos completos (cada programa con su memoria), pe
   - **Pantalla de error.** Una excepción (división entre cero, fallo de página, protección general...) ya no reinicia la máquina de
     golpe: sale una pantalla con el nombre de la excepción, RIP, RSP, registros, lo de arriba de la pila y si fue en un programa de la
     tienda; una tecla reinicia. Si pasa en el escritorio, primero vuelve a la consola para que se vea.
+  - **El reloj del sistema** (`K->ms`, el ritmo del escritorio y del audio) sale del PIT, no del TSC: en CPUs AMD K10
+    (Turion II, Athlon II, Phenom) el TSC se frena cuando el núcleo duerme (C1E), y con KVM eso trababa MPLAY y PLAY.
   - En 32 bits todo sigue como antes (sondeo, sin `hlt`).
 - **En C con BCC:** `bos_tarea(funcion, arg, "NOMBRE")` (la función lleva `__callback`), `bos_ceder()`, `bos_dormir(ms)`,
   `bos_tarea_matar(n)`, `bos_tarea_actual()`. Con la preempción, una tarea que da vueltas sin ceder ya no traba a las demás

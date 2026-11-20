@@ -126,7 +126,17 @@ void (*g_gui_tick)(void);                 /* la llama kbd_poll() ~60 veces por s
 static const struct wapp *pub_app;
 static int basic_running;
 
+static unsigned int tsc_ms(void);
+/* milisegundos desde el arranque. Con interrupciones (64 bits) sale del reloj PIT (irq_ticks): el TSC no sirve de
+ * reloj cuando la CPU hace hlt en algunas maquinas (AMD K10 / Turion II con KVM: el TSC se frena al dormir). */
 static unsigned int api_ms(void)
+{
+    if (irq_active())
+        return (unsigned int)irq_ticks;
+    return tsc_ms();
+}
+
+static unsigned int tsc_ms(void)
 {
     static u64 t0;
     u64 hz = g_tsc_hz ? g_tsc_hz : 2000000000ull, t = rdtsc();
