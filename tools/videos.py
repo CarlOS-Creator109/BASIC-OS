@@ -1,22 +1,55 @@
 #!/usr/bin/env python3
-"""videos.py - prepara una carpeta de videos para la imagen (make super VIDEOS=carpeta)
+"""videos.py - prepara una carpeta de videos para la pagina de videos del hub (make videos VIDEOS=carpeta)
 
 uso: videos.py CARPETA SALIDA [opciones de mkbvc...]
 
-Por cada video de CARPETA (.mp4 .mkv .webm .avi .mov):
-  - SALIDA/NOMBRE.MP4 (o la extension que tenga): enlace al original, para abrirlo con MPLAY
-  - SALIDA/NOMBRE.BVC: el mismo video convertido con tools/mkbvc para PLAY (solo se reconvierte si el original cambio)
+Por cada video de CARPETA (.mp4 .mkv .webm .avi .mov .m4v) deja en SALIDA:
+  NOMBRE.BVC  convertido con tools/mkbvc, para PLAY (solo se reconvierte si el original cambio)
+  NOMBRE.MP4  el video tal cual, para MPLAY (si no es .mp4 o pasa de 32 MB, ffmpeg lo pasa a MP4 de 480p)
+  NOMBRE.TXT  el titulo (la descripcion que muestra el hub), sin el [id] de YouTube y con el cirilico en letras latinas
 NOMBRE es un nombre corto de FAT (8 letras, A-Z y 0-9) sacado del titulo: "Zemlyane - Grass near home..." -> ZEMLYANE.
-Escribe SALIDA/copy.args (los --copy para mkbashimg), SALIDA/mib (megas que ocupan) y SALIDA/VIDEOS.TXT
-(que nombre corto es cada titulo; tambien va a la imagen).
+Cada archivo tiene que pesar 32 MB o menos (es lo que BASIC-OS baja de una vez): si el .BVC pasa, se reconvierte
+mas chico (menos cuadros por segundo, luego menos resolucion, luego gris).
+Lo que sale va a la carpeta videos/ del repo (la que lee el hub).
 """
-import os, re, subprocess, sys
+import os, re, shutil, subprocess, sys, unicodedata
 
 EXTS = (".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v")
+LIMIT = 32 * 1024 * 1024
+# si el .BVC no cabe, se intenta con esto (en orden)
+SMALLER = [[], ["-f", "15"], ["-w", "192", "-h", "144", "-f", "15"], ["-w", "160", "-h", "120", "-f", "12"],
+           ["-w", "160", "-h", "120", "-f", "12", "-g"]]
+
+
+CYR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
+               ["a", "b", "v", "g", "d", "e", "yo", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f",
+                "kh", "ts", "ch", "sh", "shch", "", "y", "'", "e", "yu", "ya"]))
+
+
+def latin(text):
+    """titulo legible en BASIC-OS (la consola solo pinta ASCII): cirilico transliterado, comillas anchas normales"""
+    out = []
+    for ch in unicodedata.normalize("NFKC", text):
+        lo = ch.lower()
+        if lo in CYR:
+            t = CYR[lo]
+            out.append(t.capitalize() if ch != lo else t)
+        elif ch in "\u29f8\u2215\u2044":
+            out.append("/")
+        elif ch in "\u2013\u2014":
+            out.append("-")
+        elif ch in "\u201c\u201d\u00ab\u00bb":
+            out.append('"')
+        elif ord(ch) < 128:
+            out.append(ch)
+        else:
+            d = unicodedata.normalize("NFKD", ch).encode("ascii", "ignore").decode()
+            out.append(d)
+    return re.sub(r"\s+", " ", "".join(out)).strip()
 
 
 def short_name(title, used):
-    base = re.sub(r"[^A-Za-z0-9]", "", os.path.splitext(title)[0]).upper()
+    base = re.sub(r"[^A-Za-z0-9]", "", latin(os.path.splitext(title)[0])).upper()
     base = base[:8] or "VIDEO"
     name, n = base, 1
     while name in used:
@@ -27,53 +60,79 @@ def short_name(title, used):
     return name
 
 
+def newer(dst, src):
+    return os.path.exists(dst) and os.path.getmtime(dst) >= os.path.getmtime(src)
+
+
+def make_bvc(mkbvc, src, dst, opts):
+    for extra in SMALLER:
+        tmp = dst + ".tmp"
+        r = subprocess.run([mkbvc, src, tmp] + opts + extra)
+        if r.returncode != 0:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            return "no se pudo convertir (falta ffmpeg?)"
+        if os.path.getsize(tmp) <= LIMIT:
+            os.replace(tmp, dst)
+            return None
+        print("videos:   %.1f MB no cabe en 32 MB, otra vez mas chico..." % (os.path.getsize(tmp) / 1048576), flush=True)
+        os.unlink(tmp)
+    return "ni en gris y chiquito cabe en 32 MB (es muy largo)"
+
+
+def make_mp4(src, dst):
+    if src.lower().endswith(".mp4") and os.path.getsize(src) <= LIMIT:
+        shutil.copyfile(src, dst)
+        return None
+    for crf, h in (("28", "480"), ("32", "360"), ("36", "240")):
+        tmp = dst + ".tmp.mp4"
+        r = subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", src, "-vf", "scale=-2:'min(%s,ih)'" % h,
+                            "-c:v", "libx264", "-preset", "veryfast", "-crf", crf, "-c:a", "aac", "-b:a", "96k",
+                            "-movflags", "+faststart", tmp])
+        if r.returncode != 0:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            return "ffmpeg no pudo pasarlo a MP4"
+        if os.path.getsize(tmp) <= LIMIT:
+            os.replace(tmp, dst)
+            return None
+        os.unlink(tmp)
+    return "ni a 240p cabe en 32 MB"
+
+
 def main():
     if len(sys.argv) < 3:
         sys.exit(__doc__)
     src, out, opts = sys.argv[1], sys.argv[2], sys.argv[3:]
-    here = os.path.dirname(os.path.abspath(__file__))
-    mkbvc = os.path.join(here, "mkbvc")
+    if not os.path.isdir(src):
+        sys.exit("videos: no existe la carpeta %s" % src)
+    mkbvc = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mkbvc")
     os.makedirs(out, exist_ok=True)
-    for f in os.listdir(out):                       # enlaces viejos (los .BVC se quedan: sirven de cache)
-        p = os.path.join(out, f)
-        if os.path.islink(p):
-            os.unlink(p)
-    vids = sorted(f for f in os.listdir(src) if f.lower().endswith(EXTS)) if os.path.isdir(src) else []
-    used, args, lines, total = set(), [], [], 0
+    vids = sorted(f for f in os.listdir(src) if f.lower().endswith(EXTS))
+    used, report = set(), []
     for title in vids:
-        path = os.path.abspath(os.path.join(src, title))
+        path = os.path.join(src, title)
         name = short_name(title, used)
-        ext = os.path.splitext(title)[1].upper()[:4]
-        link = os.path.join(out, name + ext)
-        os.symlink(path, link)
-        bvc = os.path.join(out, name + ".BVC")
-        if not os.path.exists(bvc) or os.path.getmtime(bvc) < os.path.getmtime(path):
+        with open(os.path.join(out, name + ".TXT"), "w", encoding="utf-8") as f:
+            f.write(latin(re.sub(r"\s*\[[A-Za-z0-9_-]{11}\]$", "", os.path.splitext(title)[0])) + "\n")   # sin el [id] de YouTube
+        bvc, mp4 = os.path.join(out, name + ".BVC"), os.path.join(out, name + ".MP4")
+        notes = []
+        if not newer(bvc, path):
             print("videos: %s -> %s.BVC ..." % (title, name), flush=True)
-            r = subprocess.run([mkbvc, path, bvc + ".tmp"] + opts)
-            if r.returncode != 0:
-                print("videos: no pude convertir %s (falta ffmpeg?)" % title, file=sys.stderr)
-                if os.path.exists(bvc + ".tmp"):
-                    os.unlink(bvc + ".tmp")
-            else:
-                os.replace(bvc + ".tmp", bvc)
-        args.append("--copy %s=%s%s" % (link, name, ext))
-        total += os.path.getsize(path)
-        line = "%-12s %s" % (name + ext, title)
-        if os.path.exists(bvc):
-            args.append("--copy %s=%s.BVC" % (bvc, name))
-            total += os.path.getsize(bvc)
-            line += "   (PLAY \"%s.BVC\")" % name
-        lines.append(line)
-    with open(os.path.join(out, "VIDEOS.TXT"), "wb") as f:      # la consola solo pinta ASCII
-        f.write("".join(l + "\n" for l in lines).encode("ascii", "replace"))
-    if lines:
-        args.append("--copy %s=VIDEOS.TXT" % os.path.join(out, "VIDEOS.TXT"))
-    with open(os.path.join(out, "copy.args"), "w") as f:
-        f.write(" ".join(args) + "\n")
-    with open(os.path.join(out, "mib"), "w") as f:
-        f.write("%d\n" % (total // 1048576 + 1))
-    for l in lines:
-        print("videos: " + l)
+            e = make_bvc(mkbvc, path, bvc, opts)
+            if e:
+                notes.append("BVC: " + e)
+        if not newer(mp4, path):
+            print("videos: %s -> %s.MP4 ..." % (title, name), flush=True)
+            e = make_mp4(path, mp4)
+            if e:
+                notes.append("MP4: " + e)
+        sizes = "  ".join("%s %.1f MB" % (os.path.basename(p), os.path.getsize(p) / 1048576) for p in (bvc, mp4) if os.path.exists(p))
+        report.append("%-8s %s   [%s]%s" % (name, title, sizes, ("  ERROR " + "; ".join(notes)) if notes else ""))
+    print()
+    for r in report:
+        print("videos: " + r)
+    print("\nvideos: listo en %s/ -> copialo a la carpeta videos/ del repo y haz push" % out)
 
 
 main()

@@ -610,10 +610,13 @@ Formato propio con gracia: **cada cuadro se dibuja del centro hacia afuera**, en
 el centro. El primer cuadro se revela despacio desde el centro. Audio: **PCM de 8 bits** sin signo, mono, intercalado cuadro por cuadro; sale por la tarjeta HDA/AC'97
 (`K->stream`) y marca el reloj del video; sin tarjeta el reloj es el del sistema.
 - Convertir (necesita `ffmpeg`): `make tools/mkbvc` y `tools/mkbvc entrada.mp4 salida.bvc [-w 240] [-h 180] [-f 20] [-r 11025] [-g] [-t 10]` (`-g` = gris de 8 bits, ideal para Bad Apple; maximo 640x480).
-- **Una carpeta de videos en `make super`:** todo lo que haya en `../video-prueba` (o `make super VIDEOS=carpeta`) entra a la
-  partición dos veces: el original con nombre corto para **MPLAY** (`ZEMLYANE.MP4`) y convertido a `.BVC` para **PLAY**
-  (`PLAY "ZEMLYANE.BVC"`). El nombre corto sale del título (8 letras, A-Z y 0-9); `TYPE "HD0.1:VIDEOS.TXT"` dice cuál es cuál.
-  Los `.BVC` se guardan en `build-super/videos/` y solo se reconvierten si el video cambia; `BVCOPTS="-w 320 -h 240"` cambia la conversión.
+- **Videos en el hub (página `/videos`):** cada video va en dos formas, `NOMBRE.BVC` para **PLAY** y `NOMBRE.MP4` para
+  **MPLAY**, en la carpeta `videos/` del repo (`NOMBRE.TXT` = descripción). En COSMOS, un clic en el `.BVC` lo baja y lo reproduce;
+  un clic en el `.MP4` lo guarda en `HD0.1:/VIDEOS/` (escritor FAT de PKG, `tools/cosmos/cmsave.c`) y MPLAY ya lo muestra en su lista.
+  Para prepararlos: `make videos VIDEOS=../video-prueba` toma todos los videos de esa carpeta y deja en `videos/` los `.BVC`, `.MP4`
+  y `.TXT` con nombres cortos sacados del título (el cirílico se pasa a letras latinas: `Служить России` -> `SLUZHITR`). Cada archivo
+  tiene que pesar 32 MB o menos: si el `.BVC` no cabe se reconvierte más chico, y un MP4 de más de 32 MB se recomprime a 480p.
+  Los `.BVC` ya hechos no se repiten. `BVCOPTS="-w 320 -h 240"` cambia la conversión.
 - Imagen: `make pc-basic-video.img VIDEO=salida.bvc`. En BASIC: `PLAY "SALIDA.BVC"` (o `EXEC "PLAY.APP"` para `VIDEO.BVC`). **Espacio** = pausa, **ESC** = salir.
 - **Videos del hub:** el hub sirve los `.BVC` de la carpeta `videos/` del repo en `/videos`; en COSMOS un clic los reproduce (ver COSMOS).
   Para publicar uno: `tools/mkbvc entrada.mp4 NOMBRE.BVC` (nombre 8.3, hasta 32 MB) y súbelo a `videos/` con git, con `NOMBRE.TXT` como descripción.

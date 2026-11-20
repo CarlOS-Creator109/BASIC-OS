@@ -151,12 +151,14 @@ DOOM.BIN: $(SYSDIR)/doom.o $(LIBO) mod.ld
 # ---- COSMOS: navegador con el Minimal Motor (MM) de Cosmos Browser (tools/cosmos/). Como DOOM, no cabe en /SYS:
 #      COSMOS.BIN va en la particion FAT junto a NET.BIN y lo carga COSMOS.APP. El motor usa float: SSE2 como SAY ----
 CMDIR := tools/cosmos
-CMSRC := cosmosmm html layout urls libc
+CMSRC := cosmosmm html layout urls libc cmsave
 CMOBJS := $(foreach f,$(CMSRC),$(CMDIR)/$(f).o)
 CMFLAGS := $(filter-out -mgeneral-regs-only -Wall -Wextra,$(CFLAGS)) -msse2 -mfpmath=sse -fno-math-errno \
            -fno-strict-aliasing -mstackrealign -D__thread= -I$(CMDIR)/inc -I$(CMDIR) -I.
 $(CMDIR)/cosmosmm.o: $(CMDIR)/cosmosmm.c $(CMDIR)/cosmos.h kapi.h mod_head.h
 	$(CC) $(CMFLAGS) -Wall -c $< -o $@
+$(CMDIR)/cmsave.o: $(CMDIR)/cmsave.c sys/fatw.h kapi.h
+	$(CC) $(CFLAGS) -Os -fno-builtin -I. -c $< -o $@
 $(CMDIR)/%.o: $(CMDIR)/%.c $(CMDIR)/cosmos.h $(CMDIR)/inc/cstub.h
 	$(CC) $(CMFLAGS) -w -c $< -o $@
 COSMOS.BIN: $(CMOBJS) mod.ld
@@ -229,6 +231,13 @@ tools/mkbvc: tools/mkbvc.c
 	cc -O2 -o $@ $<
 tools/bvcplay: tools/bvcplay.c
 	cc -O2 -o $@ $< $$(pkg-config --cflags --libs sdl2)
+# make videos VIDEOS=carpeta: cada video de la carpeta sale en videos/ como NOMBRE.BVC (PLAY), NOMBRE.MP4 (MPLAY) y
+# NOMBRE.TXT (titulo) para la pagina de videos del hub: se copia a la carpeta videos/ del repo. BVCOPTS = opciones de mkbvc.
+VIDEOS  ?= ../video-prueba
+BVCOPTS ?=
+videos: tools/mkbvc tools/videos.py
+	python3 tools/videos.py "$(VIDEOS)" videos $(BVCOPTS)
+
 pc-basic-video.img: pc-basic.img COSMOS.BIN tools/mkbashimg $(VIDEO)
 	tools/mkbashimg $@ pc-basic.img tools/linux/BZIMAGE tools/linux/INITRD.GZ --copy $(VIDEO)=$(shell echo $(notdir $(VIDEO)) | tr a-z A-Z) --copy COSMOS.BIN=COSMOS.BIN \
 	  $$( [ -f tools/net/NET.BIN ] && echo --copy tools/net/NET.BIN=NET.BIN ) --mib $$(( ( $$(stat -c %s $(VIDEO)) / 1048576 ) + 24 ))
@@ -265,22 +274,15 @@ $(SUPERDIR)/hook.bin: $(SUPERDIR)/hook.asm
 	nasm -f bin $< -o $@
 $(SUPERDIR)/super.bin: $(SUPERDIR)/super.asm $(SUPERDIR)/hook.bin
 	cd $(SUPERDIR) && nasm -f bin super.asm -o super.bin
-# la particion lleva todo: DOOM + WAD, el video si existe, NET.BIN si existe y Linux.
-# VIDEOS = carpeta de videos (por defecto ../video-prueba): cada uno va tal cual (para MPLAY) y convertido a .BVC
-# (para PLAY) con un nombre corto; VIDEOS.TXT dice cual es cual. BVCOPTS = opciones de mkbvc (ej. "-w 320 -h 240").
-# Los .BVC se guardan en build-super/videos y solo se reconvierten si el video cambia.
-VIDEOS  ?= ../video-prueba
-BVCOPTS ?=
-build-super/completo64.img: pc-basic.img DOOM.BIN COSMOS.BIN tools/mkbashimg tools/mkbvc tools/videos.py $(WAD) $(wildcard $(VIDEO))
+# la particion lleva todo: DOOM + WAD, el video si existe, NET.BIN si existe y Linux
+build-super/completo64.img: pc-basic.img DOOM.BIN COSMOS.BIN tools/mkbashimg $(WAD) $(wildcard $(VIDEO))
 	mkdir -p build-super
-	python3 tools/videos.py "$(VIDEOS)" build-super/videos $(BVCOPTS)
 	tools/mkbashimg $@ pc-basic.img tools/linux/BZIMAGE tools/linux/INITRD.GZ \
 	  --copy DOOM.BIN=DOOM.BIN --copy COSMOS.BIN=COSMOS.BIN --copy $(WAD)=$(shell echo $(notdir $(WAD)) | tr a-z A-Z) \
 	  $(if $(wildcard $(VIDEO)),--copy $(VIDEO)=$(shell echo $(notdir $(VIDEO)) | tr a-z A-Z)) \
 	  $$( [ -f tools/net/NET.BIN ] && echo --copy tools/net/NET.BIN=NET.BIN ) \
 	  $$( [ -n "$(HUB_URL)" ] && { { echo "$(HUB_URL)"; [ -z "$(HUB_KEY)" ] || echo "$(HUB_KEY)"; } > HUB.CFG; echo --copy HUB.CFG=HUB.CFG; } ) \
-	  $$(cat build-super/videos/copy.args) \
-	  --mib $$(( 64 + $$(cat build-super/videos/mib) + $(if $(wildcard $(VIDEO)),$$(stat -c %s $(VIDEO)) / 1048576,0) ))
+	  --mib $$(( 64 + $(if $(wildcard $(VIDEO)),$$(stat -c %s $(VIDEO)) / 1048576,0) ))
 super-basicos.img: build-super/completo64.img pc-basic32.img $(SUPERDIR)/super.bin $(SUPERDIR)/mksuper.py
 	python3 $(SUPERDIR)/mksuper.py $@ $(SUPERDIR)/super.bin build-super/completo64.img pc-basic32.img
 	@$(if $(wildcard $(VIDEO)),,echo "(sin video: no existe $(VIDEO); usa make super VIDEO=archivo.bvc)")
@@ -316,4 +318,4 @@ clean:
 	rm -f *.o *.elf *.bin pc-basic.img pc-basic-doom.img $(SYSDIR)/*.o $(SYSDIR)/*.elf $(SYSDIR)/*.SYS $(SYSDIR)/*.APP apps/*.o apps/*.elf
 	$(MAKE) -C test clean
 
-.PHONY: all 64 32 doom video super bas2bin juegos run run32 test clean store net
+.PHONY: all 64 32 doom video videos super bas2bin juegos run run32 test clean store net

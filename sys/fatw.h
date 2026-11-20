@@ -1,4 +1,4 @@
-/* fatw.h - escritor FAT16 minimo (lo usan PKG y BCC): guarda archivos en HDn.1:/APPS/ del disco de arranque.
+/* fatw.h - escritor FAT16 minimo (lo usan PKG, BCC y COSMOS): guarda archivos en HDn.1:/APPS/ (o otra carpeta de la raiz).
  * Se incluye una vez, despues de definir K (const struct kapi *), los tipos u8/u16/u32, memset/memcpy y
  * FW_FAT, FW_ROOT, FW_BUF, FW_SCR (zonas de RAM: 128 KB, 16 KB, 64 KB y 64 KB). Solo discos de la BIOS. */
 #ifndef FATW_H
@@ -234,9 +234,9 @@ static void put_entry(u8 *e, const u8 *nm, int attr, u32 first, u32 size)
 }
 
 /* devuelve el primer cluster de APPS (lo crea si hace falta); 0 = error */
-static u32 fw_apps_dir(void)
+/* carpeta de la raiz (la crea si no existe): su primer cluster, 0 = no se pudo */
+static u32 fw_root_dir(const u8 *nm)
 {
-    static const u8 nm[11] = { 'A', 'P', 'P', 'S', ' ', ' ', ' ', ' ', ' ', ' ', ' ' };
     u8 *e; u32 lba, n, c;
     if (fw_find(0, nm, 0, &e, &lba, &n) && (e[11] & 0x10))
         return *(u16 *)(e + 26);
@@ -255,15 +255,16 @@ static u32 fw_apps_dir(void)
         return 0;
     return c;
 }
+static u32 fw_apps_dir(void) { return fw_root_dir((const u8 *)"APPS       "); }
 
-/* guarda data[size] como HDn.1:/APPS/nombre. 0 = bien */
-static int fw_save(const char *name, const u8 *data, u32 size)
+/* guarda data[size] como HDn.1:/CARPETA/nombre (dir11 = nombre de la carpeta en formato FAT, 11 letras). 0 = bien */
+static int fw_save_in(const char *dir11, const char *name, const u8 *data, u32 size)
 {
     u8 nm[11], *e; u32 d, lba, n, first = 0, old = 0, nc, c, off;
     int found;
     if (!fw.ok || !name11(name, nm))
         return 1;
-    d = fw_apps_dir();
+    d = fw_root_dir((const u8 *)dir11);
     if (!d)
         return 2;
     found = fw_find(d, nm, 0, &e, &lba, &n);
@@ -294,6 +295,9 @@ static int fw_save(const char *name, const u8 *data, u32 size)
         return fw_wr(lba, n, (const u8 *)FROOT + (lba - fw.root_lba) * 512) ? 7 : 0;
     return fw_wr(lba, n, FBUF) ? 7 : 0;
 }
+
+/* guarda data[size] como HDn.1:/APPS/nombre. 0 = bien */
+static int fw_save(const char *name, const u8 *data, u32 size) { return fw_save_in("APPS       ", name, data, size); }
 
 static int fw_delete(const char *name)
 {

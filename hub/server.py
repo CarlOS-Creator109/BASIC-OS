@@ -30,7 +30,7 @@ Variables de entorno
                 En BASIC-OS basta poner la direccion  https://mi-hub.onrender.com/liberty  (tecla U de PKG).
   NOMBRE_KEY    clave de subida de esa tienda (LIBERTY_KEY, PLUGINS_KEY...); si falta se usa HUB_KEY
   OPEN_STORES   tiendas que aceptan subidas SIN clave ni revision, separadas por comas (liberty)
-  VIDEOS        "0" apaga los videos (/videos). Son archivos NOMBRE.BVC (+ NOMBRE.TXT) en la carpeta VIDEO_PATH del repo    (1)
+  VIDEOS        "0" apaga los videos (/videos). Son NOMBRE.BVC (PLAY) y/o NOMBRE.MP4 (MPLAY) (+ NOMBRE.TXT) en VIDEO_PATH (1)
   VIDEO_PATH    carpeta del repo con los videos                                                                  (videos)
   FORO          "0" apaga el foro de texto (/foro/...). Cada hilo es un archivo <FORO_PATH>/NNNNNN.txt del repo.   (1)
   FORO_PATH     carpeta del repo con los hilos                                                                   (foro)
@@ -49,9 +49,10 @@ Rutas (con varias tiendas, delante va /NOMBRE: /liberty/list, /liberty/get/X, PO
   POST /foro/post  cuerpo "BOSFORO 1\nCLAVE\nAUTOR\nHILO\nTITULO\n" + el mensaje. HILO = el ID de un hilo o NEW (y entonces
                 lleva TITULO). Responde "OK ID" o un error (403 clave, 400 no valido, 409 hilo lleno, 429 muy seguido).
   Moderar: borra o edita el archivo del hilo en GitHub (el webhook o el CACHE_TTL lo recogen).
-  /videos       pagina HTML (para COSMOS: un clic en un video lo baja y lo reproduce PLAY)
-  /videos/list  "#VIDEOS 1 n" y una linea por video:  NOMBRE.BVC bytes descripcion
-  /videos/get/NOMBRE.BVC   el video. Los videos se suben al repo con git (VIDEO_PATH/NOMBRE.BVC, hasta 32 MB: lo que cabe en
+  /videos       pagina HTML (en COSMOS: clic en un .BVC lo baja y lo reproduce PLAY; clic en un .MP4 lo guarda en
+                HDn.1:/VIDEOS/ para abrirlo con MPLAY)
+  /videos/list  "#VIDEOS 1 n" y una linea por archivo:  NOMBRE.BVC (o .MP4) bytes descripcion
+  /videos/get/NOMBRE.BVC   el video (o NOMBRE.MP4). make videos (tools/videos.py) los prepara desde una carpeta de .mp4. Los videos se suben al repo con git (VIDEO_PATH/NOMBRE.BVC, hasta 32 MB: lo que cabe en
                 la memoria de BASIC-OS) o por la web de GitHub (hasta 25 MB).
   /             pagina de estado de todas las tiendas      /health   "ok"
 
@@ -62,7 +63,7 @@ import base64, collections, textwrap, hashlib, hmac, json, os, re, ssl, sys, thr
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_~-]{1,8}\.(BIN|BAS)$", re.I)
-VIDEO_RE = re.compile(r"^[A-Za-z0-9_~-]{1,8}\.BVC$", re.I)
+VIDEO_RE = re.compile(r"^[A-Za-z0-9_~-]{1,8}\.(BVC|MP4)$", re.I)
 VIDEO_MAX = 32 * 1024 * 1024           # BASIC-OS baja el video a 0x9000000 y tiene hasta 0xB000000
 POST_MAX = 2 * 1024 * 1024             # lo que puede mandar BASIC-OS (bospost copia al heap de iPXE de 4 MB)
 MAX_BYTES = 16 * 1024 * 1024           # el SO reserva 32 MB para un programa de la tienda
@@ -797,24 +798,35 @@ class H(BaseHTTPRequestHandler):
                 return self.send(502, "ERROR no pude leerlo de GitHub: %s\n" % e)
             return self.send(200, data, "application/octet-stream")
         if path in ("/", "/index.html"):
-            rows = []
-            for n, a in sorted(vids.items()):
+            def size(a):
                 mb = a["size"] / (1024 * 1024)
-                rows.append("<li><a href=\"/videos/get/%s\" style=\"color:#b8c76f\"><b>%s</b></a> &middot; %s%s</li>" % (
-                    esc(n), esc(n[:-4]), ("%.1f MB" % mb) if mb >= 1 else ("%d KB" % max(1, a["size"] // 1024)),
-                    (" &middot; " + esc(a["desc"])) if a["desc"] else ""))
+                return ("%.1f MB" % mb) if mb >= 1 else ("%d KB" % max(1, a["size"] // 1024))
+            groups = {}
+            for n, a in vids.items():                              # NOMBRE.BVC y NOMBRE.MP4 van en el mismo renglon
+                groups.setdefault(n[:-4], {})[n[-3:].upper()] = (n, a)
+            rows = []
+            for base in sorted(groups):
+                g = groups[base]
+                desc = next((a["desc"] for _, a in g.values() if a["desc"]), "")
+                links = []
+                if "BVC" in g:
+                    links.append("<a href=\"/videos/get/%s\" style=\"color:#b8c76f\">ver con PLAY</a> (%s)" % (esc(g["BVC"][0]), size(g["BVC"][1])))
+                if "MP4" in g:
+                    links.append("<a href=\"/videos/get/%s\" style=\"color:#9ad284\">bajar MP4 para MPLAY</a> (%s)" % (esc(g["MP4"][0]), size(g["MP4"][1])))
+                rows.append("<li><b>%s</b>%s<br>%s</li>" % (esc(base), (" &middot; " + esc(desc)) if desc else "", " &middot; ".join(links)))
             body = ("<!doctype html><html><head><meta charset=utf-8><title>Videos de BASIC-OS</title></head>"
                     "<body style=\"background:#352879;color:#ffffff;margin:16px\">"
                     "<h1 style=\"color:#b8c76f\">Videos de BASIC-OS</h1>"
-                    "<p>Videos en formato <b>.BVC</b> (el de PLAY: cada cuadro se dibuja del centro hacia afuera). "
-                    "En COSMOS, un clic en un video lo baja y lo reproduce a pantalla completa (<b>Espacio</b> pausa, <b>ESC</b> sale). "
-                    "En otro navegador el clic lo descarga.</p>"
+                    "<p>Cada video viene en dos formas. <b>.BVC</b> es el de PLAY (cada cuadro se dibuja del centro hacia afuera): "
+                    "en COSMOS un clic lo baja y lo reproduce a pantalla completa (<b>Espacio</b> pausa, <b>ESC</b> sale). "
+                    "<b>.MP4</b> es el video original: en COSMOS un clic lo guarda en <code>HD0.1:/VIDEOS/</code> y se abre con "
+                    "<b>MPLAY</b> (paquete de la tienda). En otro navegador el clic lo descarga.</p>"
                     "<h2 style=\"color:#9ad284\">%d %s</h2><ul>%s</ul>"
-                    "<p style=\"color:#959595\">Subir un video: conviertelo con <code>tools/mkbvc entrada.mp4 SALIDA.BVC</code> "
-                    "(nombre 8.3, hasta 32 MB) y ponlo en la carpeta <code>%s/</code> del repo, con <code>SALIDA.TXT</code> "
-                    "(primera linea = descripcion) si quieres.</p>"
+                    "<p style=\"color:#959595\">Subir videos: pon los .mp4 en una carpeta y corre <code>make videos VIDEOS=carpeta</code>; "
+                    "copia lo que sale en <code>videos/</code> a la carpeta <code>%s/</code> del repo (nombre 8.3, hasta 32 MB cada uno; "
+                    "<code>NOMBRE.TXT</code> = descripcion).</p>"
                     "<p><a href=\"/\" style=\"color:#70a4b2\">Estado del hub</a></p></body></html>") % (
-                len(vids), "video" if len(vids) == 1 else "videos",
+                len(groups), "video" if len(groups) == 1 else "videos",
                 "".join(rows) or "<li>Todavia no hay videos.</li>", esc(st.path))
             return self.send(200, body, "text/html; charset=utf-8", head=head)
         return self.send(404, "no existe\n", head=head)

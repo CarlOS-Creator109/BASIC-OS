@@ -771,7 +771,7 @@ static const char home_html[] =
     "<li><a href=\"https://text.npr.org/\" style=\"color:#70a4b2\">NPR solo texto (noticias)</a></li>"
     "<li><a href=\"http://68k.news/\" style=\"color:#70a4b2\">68k.news (noticias para equipos retro)</a></li>"
     "<li><a href=\"https://basic-os.onrender.com/list\" style=\"color:#70a4b2\">Lista del hub de BASIC-OS</a></li>"
-    "<li><a href=\"https://basic-os.onrender.com/videos\" style=\"color:#70a4b2\">Videos del hub de BASIC-OS (.BVC)</a></li>"
+    "<li><a href=\"https://basic-os.onrender.com/videos\" style=\"color:#70a4b2\">Videos del hub de BASIC-OS (PLAY y MPLAY)</a></li>"
     "</ul>"
     "<h2 style=\"color:#9ad284\">Teclas</h2>"
     "<p><b>Enter</b> ir &middot; <b>Tab</b> salir de la barra &middot; empieza a escribir para una direcci\xc3\xb3n nueva<br>"
@@ -951,6 +951,59 @@ static void play_video(const char *u)
     redraw_status();
 }
 
+/* la URL apunta a un video/audio para MPLAY (.MP4 .MKV .WEBM .MP3...): se baja y se guarda en el disco */
+static int is_media(const char *u)
+{
+    static const char *const ext[] = { ".mp4", ".m4v", ".mkv", ".webm", ".avi", ".mov", ".mp3", ".ogg", ".wav", 0 };
+    size_t n = strcspn(u, "?#"), k;
+    int i;
+    for (i = 0; ext[i]; i++) {
+        k = strlen(ext[i]);
+        if (n > k && !strncasecmp(u + n - k, ext[i], k))
+            return 1;
+    }
+    return 0;
+}
+
+int cm_save(const struct kapi *k, const char *dir11, const char *name, const void *data, unsigned size, char *where);
+
+/* baja el archivo y lo deja en HDn.1:/VIDEOS/ (ahi lo busca MPLAY). El nombre es el de la URL (tiene que ser 8.3) */
+static void save_media(const char *u)
+{
+    char name[16], where[48];
+    size_t n = strcspn(u, "?#"), a = n;
+    long got;
+    int r, k = 0;
+    while (a > 0 && u[a - 1] != '/' && u[a - 1] != ':')
+        a--;
+    while (a < n && k < 15)
+        name[k++] = u[a++];
+    name[k] = 0;
+    scopy(status, "Bajando el video para MPLAY...", sizeof status);
+    redraw_status();
+    got = net_fetch(u);
+    if (got <= 0) {
+        scopy(status, "Error: no se pudo bajar el video (maximo 32 MB)", sizeof status);
+        redraw_status();
+        return;
+    }
+    scopy(status, "Guardando en el disco...", sizeof status);
+    redraw_status();
+    r = cm_save(K, "VIDEOS     ", name, (const void *)(unsigned long)STASH, (unsigned)got, where);
+    sse_on();
+    if (r == 100)
+        scopy(status, "Error: no hay disco FAT de la BIOS donde guardarlo", sizeof status);
+    else if (r == 1)
+        snprintf(status, sizeof status, "Error: %s no es un nombre corto (8.3)", name);
+    else if (r == 4)
+        scopy(status, "Error: el disco esta lleno", sizeof status);
+    else if (r)
+        snprintf(status, sizeof status, "Error %d al guardar %s", r, name);
+    else
+        snprintf(status, sizeof status, "Guardado %s (%ld KB): abrelo con MPLAY", where, got / 1024);
+    redraw_status();
+}
+
 static void do_load(void)
 {
     long n = -1;
@@ -963,9 +1016,12 @@ static void do_load(void)
         redraw_status();
         return;
     }
-    if (is_bvc(u)) {
+    if (is_bvc(u) || (is_media(u) && !is_drive_path(u))) {
         busy = 1;
-        play_video(u);
+        if (is_bvc(u))
+            play_video(u);
+        else
+            save_media(u);
         busy = 0;
         scopy(addr, strncmp(cur, "cosmos:", 7) ? cur : "", URLMAX);   /* la pagina sigue siendo la de antes */
         addr_fresh = 1;
