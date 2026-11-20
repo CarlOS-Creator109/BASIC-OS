@@ -18,7 +18,7 @@ static void wr32(b2u8 *p, b2u32 v) { p[0] = (b2u8)v; p[1] = (b2u8)(v >> 8); p[2]
 static int find_ext(const b2u8 *b, int n, b2u32 magic)
 {
     int i;
-    for (i = 16; i + 8 <= n && i < 4096; i += 4)
+    for (i = 16; i + 8 <= n && i < 8192; i += 4)
         if (rd32(b + i) == magic) return i;
     return -1;
 }
@@ -520,9 +520,23 @@ static void st_next(void)
 }
 static void st_generic(void)                   /* PLOT, SOUND, LOCATE, POKE, CLS...: los hace el interprete */
 {
-    char w[24];
-    int n = word(w, sizeof w);
+    char w[48];
+    int n = word(w, 24);
     if (!n) { b2_fail("SYNTAX"); return; }
+    b2_ws();
+    if (b2_alpha(P[0]) && b2_alpha(P[1])) {    /* subcomando sin coma detras (SPRITE OFF 1, SPRITE DEF 0,8,8): va */
+        const char *save = P;                  /* pegado al nombre; SOUND SINE,440,... sigue siendo argumento */
+        char sub[24];
+        int m = word(sub, sizeof sub), k;
+        b2_ws();
+        if (m && *P != ',' && *P != '(' && !is_zero_arg_fn(sub)) {
+            w[n++] = ' ';
+            for (k = 0; k < m && n < 47; k++) w[n++] = sub[k];
+            w[n] = 0;
+        } else {
+            P = save;
+        }
+    }
     lit_addr(w, n); mov_rdi_rax(); ecall(RT_CB_BEGIN);
     b2_ws();
     if (*P && *P != ':') {
@@ -740,16 +754,67 @@ static int native(const char *src, int n, unsigned char *out, int max, char *msg
 }
 #endif
 
+/* ---- icono: lineas "N REM ICONO "NOMBRE"" y "N REM ICB fila" -> bloque BICN en el hueco del runtime ---- */
+static int ic_up(int c) { return (c >= 'a' && c <= 'z') ? c - 32 : c; }
+static int rem_word(const char *p, const char *w)
+{
+    while (*w) { if (ic_up(*p) != *w) return 0; p++; w++; }
+    return 1;
+}
+static void put_icon(const char *src, int n, unsigned char *out, int len)
+{
+    /* struct bin_icon: magic(4) label[16] icb[400], justo despues de la cabecera de 16 bytes */
+    unsigned char *lbl = out + 20, *icb = out + 36;
+    int i = 0, k = 4, rows = 0, haslbl = 0;
+    if (len < 16 + 420 || rd32(out + 16) != B2B_ISLOT) return;
+    icb[0] = 'I'; icb[1] = 'C'; icb[2] = 'B'; icb[3] = '\n';
+    while (i < n) {
+        const char *l = src + i, *p = l;
+        int e = i;
+        while (e < n && src[e] != '\n') e++;
+        while (p < src + e && (*p == ' ' || (*p >= '0' && *p <= '9'))) p++;
+        if (src + e - p > 4 && rem_word(p, "REM ")) {
+            p += 4;
+            while (p < src + e && *p == ' ') p++;
+            if (src + e - p > 6 && rem_word(p, "ICONO ")) {
+                int m = 0;
+                p += 6;
+                while (p < src + e && (*p == ' ' || *p == '"')) p++;
+                while (p < src + e && *p != '"' && *p != '\r' && m < 15) lbl[m++] = (unsigned char)ic_up(*p++);
+                while (m < 16) lbl[m++] = 0;
+                haslbl = 1;
+            } else if (src + e - p > 4 && rem_word(p, "ICB ")) {
+                p += 4;
+                while (p < src + e && *p != '\r' && k < 398) icb[k++] = (unsigned char)*p++;
+                if (k < 399) icb[k++] = '\n';
+                rows++;
+            }
+        }
+        i = e + 1;
+    }
+    if (!haslbl || !rows) return;
+    while (k < 400) icb[k++] = 0;
+    wr32(out + 16, 0x4E434942u);              /* 'BICN' */
+}
+
 int b2b_compile(const char *src, int n, int nat, unsigned char *out, int max, char *msg, int msgmax)
 {
+    int r;
     if (msg && msgmax) msg[0] = 0;
 #ifdef B2B_NO_NATIVE
     if (nat) {
         put_msg(msg, msgmax, "el modo nativo solo existe en PC BASIC de 64 bits", -1, 0);
         return -1;
     }
+    r = -1;
 #else
-    if (nat) return native(src, n, out, max, msg, msgmax);
+    if (nat) {
+        r = native(src, n, out, max, msg, msgmax);
+        if (r > 0) put_icon(src, n, out, r);
+        return r;
+    }
 #endif
-    return pack(src, n, out, max, msg, msgmax);
+    r = pack(src, n, out, max, msg, msgmax);
+    if (r > 0) put_icon(src, n, out, r);
+    return r;
 }

@@ -23,6 +23,7 @@ static int thunk_ready;
 int bios_int13(struct bregs *r)
 {
     u8 mask;
+    u64 st;
 
     if (!thunk_ready) {
         memcpy((void *)0x8000, thunk_blob, (size_t)(thunk_end - thunk_blob));
@@ -34,10 +35,12 @@ int bios_int13(struct bregs *r)
     TH_DX = r->dx;
     TH_SI = r->si;
     TH_ES = BOUNCE_SEG;
+    st = irq_bios_enter();                    /* PIC, PIT e IVT como los espera la BIOS (irq.c) */
     mask = inb(0x21);
     outb(0x21, mask | 0x02);                  /* la BIOS no debe robar teclas (IRQ1) */
     ((void (*)(void))0x8000)();
     outb(0x21, mask);
+    irq_bios_leave(st);
     r->ax = TH_RAX;
     r->bx = TH_RBX;
     r->cx = TH_RCX;

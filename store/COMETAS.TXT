@@ -1,0 +1,1 @@
+[juego] COMETAS: rompe y esquiva cometas (motor BMG; flechas + espacio)

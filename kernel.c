@@ -13,7 +13,9 @@
 
 void plat_putc(char c)                    { vga_putc(c); }
 int  plat_col(void)                       { return vga_col(); }
-void plat_clear(void)                     { vga_clear(); }
+void plat_clear(void)                     { vga_clear(); bmg_api(8, 0, 0, 0, 0); }
+int  plat_bmg(int op, int a, int b, int c, const char *s) { return bmg_api(op, a, b, c, s); }
+int  plat_keydown(int code)               { return kbd_held(code); }
 void plat_color(int fg, int bg)           { vga_setcolor(fg, bg); }
 int  plat_readline(char *buf, int max)    { return kbd_readline(buf, max); }
 int  plat_break(void)                     { return kbd_esc(); }
@@ -35,6 +37,19 @@ void plat_hline(int x1, int x2, int y, int c) { vga_hline(x1, x2, y, c); }
 
 static void sleep_ms(int ms, int use_esc)
 {
+    if (irq_active()) {                       /* con reloj: la CPU duerme entre milisegundos */
+        u64 end = irq_ticks + (u64)(unsigned)ms;
+        while ((long long)(irq_ticks - end) < 0) {
+            audio_service();
+            if (use_esc && kbd_esc()) {
+                kbd_esc_again();
+                break;
+            }
+            task_yield();
+            cpu_idle();
+        }
+        return;
+    }
     u64 need = (u64)(unsigned int)ms * PIT_HZ / 1000, got = 0;
     u32 prev, cur;
 
@@ -444,6 +459,7 @@ void kmain(void)
     int i;
 
     ram_init();
+    irq_init();
     vga_init();
     vga_splash(0, "INICIANDO...");
     mouse_init();

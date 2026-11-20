@@ -582,6 +582,81 @@ void vga_hline(int x1, int x2, int y, int c)
     gdirty = 1;
 }
 
+/* ---- BMG (bmg.c): guardar/restaurar un rectangulo y pintar un sprite, en la consola actual ----
+ * En una ventana del escritorio se trabaja sobre el plano de PLOT (un byte por pixel); a pantalla completa, sobre el
+ * framebuffer (bytes crudos, con la escala). El rectangulo ya viene recortado a la pantalla. */
+int vga_rect_bytes(int w, int h)
+{
+    if (C->pgfx)
+        return w * h;
+    return w * h * scale * scale * (int)(bpp / 8);
+}
+
+void vga_rect_get(int x, int y, int w, int h, u8 *buf)
+{
+    int j, s;
+    if (!gfx) return;
+    if (C->pgfx) {
+        for (j = 0; j < h; j++, buf += w)
+            memcpy(buf, C->pgfx + (y + j) * C->stride + x, (size_t)w);
+        return;
+    }
+    mouse_hide();
+    {
+        u32 bytes = bpp / 8, rb = (u32)(w * scale) * bytes;
+        for (j = 0; j < h * scale; j++, buf += rb) {
+            const volatile u8 *p = fb + (u32)(y0 + y * scale + j) * pitch + (u32)(x0 + x * scale) * bytes;
+            for (s = 0; s < (int)rb; s++) buf[s] = p[s];
+        }
+    }
+}
+
+void vga_rect_set(int x, int y, int w, int h, const u8 *buf)
+{
+    int j, s;
+    if (!gfx) return;
+    if (C->pgfx) {
+        for (j = 0; j < h; j++, buf += w)
+            memcpy(C->pgfx + (y + j) * C->stride + x, buf, (size_t)w);
+        if (C->dirty) C->dirty(C->user, x, y, w, h);
+        return;
+    }
+    mouse_hide();
+    {
+        u32 bytes = bpp / 8, rb = (u32)(w * scale) * bytes;
+        for (j = 0; j < h * scale; j++, buf += rb) {
+            volatile u8 *p = fb + (u32)(y0 + y * scale + j) * pitch + (u32)(x0 + x * scale) * bytes;
+            for (s = 0; s < (int)rb; s++) p[s] = buf[s];
+        }
+    }
+    gdirty = 1;
+}
+
+/* pix: indices de color 0-15, 255 = transparente; stride = ancho de la fila en pix */
+void vga_sprite(int x, int y, int w, int h, const u8 *pix, int stride)
+{
+    int i, j;
+    if (!gfx) return;
+    if (C->pgfx) {
+        for (j = 0; j < h; j++) {
+            u8 *d = C->pgfx + (y + j) * C->stride + x;
+            const u8 *sp = pix + j * stride;
+            for (i = 0; i < w; i++)
+                if (sp[i] != 255) d[i] = sp[i] & 15;
+        }
+        if (C->dirty) C->dirty(C->user, x, y, w, h);
+        return;
+    }
+    mouse_hide();
+    for (j = 0; j < h; j++) {
+        const u8 *sp = pix + j * stride;
+        for (i = 0; i < w; i++)
+            if (sp[i] != 255)
+                fill_rect((u32)(x0 + (x + i) * scale), (u32)(y0 + (y + j) * scale), (u32)scale, (u32)scale, pal[sp[i] & 15]);
+    }
+    gdirty = 1;
+}
+
 int vga_gui_active(void) { return gui; }
 
 void vga_geom(struct vgeom *g)

@@ -94,6 +94,12 @@ int  vga_gfx_w(void);
 int  vga_gfx_h(void);
 void vga_plot(int x, int y, int c);
 void vga_hline(int x1, int x2, int y, int c);
+int  vga_rect_bytes(int w, int h);           /* BMG: guardar/restaurar debajo de un sprite y pintarlo */
+void vga_rect_get(int x, int y, int w, int h, u8 *buf);
+void vga_rect_set(int x, int y, int w, int h, const u8 *buf);
+void vga_sprite(int x, int y, int w, int h, const u8 *pix, int stride);
+int  bmg_api(int op, int a, int b, int c, const char *s);   /* bmg.c */
+int  kbd_held(int code);                     /* kbd.c: 1 si la tecla esta apretada ahora */
 int  vga_gui(int on);                   /* 0 = bien; <0 = sin memoria para las capas */
 int  vga_gui_active(void);
 void vga_locate(int col, int row);
@@ -174,6 +180,15 @@ int  ram_ok(u64 addr);
 
 /* task.c: tareas cooperativas */
 void task_yield(void);
+int  task_others_ready(void);            /* task.c: hay otra tarea lista (para el reloj) */
+void task_preempt(void);
+void irq_init(void);                     /* irq.c: interrupciones, reloj a 1000 Hz, preempcion */
+int  irq_active(void);
+void cpu_idle(void);                     /* espera la siguiente interrupcion (hlt) */
+u64  irq_bios_enter(void);
+void irq_bios_leave(u64 st);
+void irq_shutdown(void);
+extern volatile u64 irq_ticks;           /* milisegundos desde irq_init() (solo 64 bits) */
 long task_api(int op, void (*fn)(void *), void *arg, const char *name);
 int  task_line(int i, char *out);
 unsigned plat_ms_now(void);             /* kernel.c */

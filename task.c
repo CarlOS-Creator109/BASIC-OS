@@ -3,7 +3,8 @@
  * Multitarea COOPERATIVA: cada tarea tiene su pila y sus registros; el cambio de tarea ocurre cuando alguien
  * espera: kbd_poll() (que llaman todos los bucles que esperan una tecla, el escritorio, iPXE...) llama a
  * task_yield() y la CPU pasa a la siguiente tarea lista. Una tarea que nunca espera ni llama a K->task(TASK_YIELD)
- * se queda con la CPU; el paso siguiente es que el reloj (PIT) lo haga solo cada pocos milisegundos (preemptiva).
+ * se queda con la CPU... salvo que este corriendo codigo de un programa (>= 0x9000000): ahi el reloj (irq.c) se la
+ * quita cada 10 ms (preemptiva). El codigo del kernel nunca se interrumpe para cambiar de tarea.
  *
  * La tarea 0 es la de siempre (el kernel, BASIC, el escritorio). Las demas se crean con
  * K->task(TASK_NEW, funcion, argumento, "NOMBRE"): la funcion recibe el argumento (convencion de C normal) y al
@@ -80,14 +81,11 @@ static void reap(void)
             T[i].state = T_FREE;
 }
 
-void task_yield(void)
+/* elige la siguiente tarea lista y cambia a ella; 0 si no hay otra */
+static int switch_next(void)
 {
     int i, n, prev;
-    unsigned now;
-    if (!inited || in_yield)
-        return;
-    in_yield = 1;
-    now = (unsigned)plat_ms_now();
+    unsigned now = (unsigned)plat_ms_now();
     for (n = 1; n <= MAXT; n++) {
         i = (cur + n) % MAXT;
         if (T[i].state == T_SLEEP && (int)(now - T[i].wake) >= 0)
@@ -95,17 +93,46 @@ void task_yield(void)
         if (T[i].state == T_READY)
             break;
     }
-    if (n > MAXT || i == cur) {
-        in_yield = 0;
-        reap();
-        return;
-    }
+    if (n > MAXT || i == cur)
+        return 0;
     prev = cur;
     cur = i;
     T[i].runs++;
     task_swap(&T[prev].sp, T[i].sp);
-    /* aqui vuelve la tarea prev cuando le toca otra vez */
+    return 1;
+}
+
+/* para el reloj: hay alguna otra tarea que podria correr (no mira el reloj de las dormidas: eso lo hace el cambio) */
+int task_others_ready(void)
+{
+    int i;
+    if (!inited || in_yield)
+        return 0;
+    for (i = 0; i < MAXT; i++)
+        if (i != cur && (T[i].state == T_READY || T[i].state == T_SLEEP))
+            return 1;
+    return 0;
+}
+
+/* desde la interrupcion del reloj (interrupciones apagadas; las vuelve a prender el iretq) */
+void task_preempt(void)
+{
+    if (!inited || in_yield)
+        return;
+    in_yield = 1;
+    switch_next();
     in_yield = 0;
+}
+
+void task_yield(void)
+{
+    if (!inited || in_yield)
+        return;
+    in_yield = 1;
+    switch_next();
+    in_yield = 0;
+    if (irq_active())
+        __asm__ volatile("sti");               /* si nos dejo aqui una tarea interrumpida por el reloj */
     reap();
 }
 
@@ -113,6 +140,8 @@ static void task_entry(void)
 {
     struct task *t = &T[cur];
     in_yield = 0;
+    if (irq_active())
+        __asm__ volatile("sti");
     t->fn(t->arg);
     t->state = T_DEAD;                       /* ya no vuelve a recibir la CPU */
     for (;;)

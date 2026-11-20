@@ -14,6 +14,7 @@
 #define B2B_BASE   0x9000000u               /* los programas de la tienda se enlazan aqui */
 #define B2B_PMAGIC 0x50423242u              /* 'B2BP' extension del runtime empaquetador */
 #define B2B_NMAGIC 0x4E423242u              /* 'B2BN' extension del runtime nativo */
+#define B2B_ISLOT  0x58434942u              /* 'BICX': hueco para el icono (pasa a 'BICN' si el programa trae uno) */
 
 /* runtime empaquetador: el compilador llena text/len (direccion absoluta del texto y su largo) */
 struct b2b_pext { unsigned int magic, text, len, pad; };
@@ -35,6 +36,11 @@ enum {
     RT_NFUNCS
 };
 enum { FN_ABS, FN_SGN, FN_SQR, FN_RND };
+
+/* Icono de escritorio dentro del programa (opcional), en lineas REM que el interprete ignora:
+ *   1 REM ICONO "COMETAS"            nombre bajo el icono
+ *   2 REM ICB ......CCCC......       una fila del dibujo por linea (digito hex = color del C64, '.' = nada)
+ * El .BIN sale con el bloque BICN (sys/binicon.h) y el escritorio le pone icono cuando esta en HDn.1:/APPS/. */
 
 /* compila src (texto BASIC, lineas "10 PRINT ...") a out. native = 1 nativo, 0 empaquetador.
  * Devuelve el tamano del .BIN, o -1 con el error en msg. */

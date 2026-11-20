@@ -704,6 +704,8 @@ static void c_title(struct wctx *c, const char *t)
 
 static void launch(const char *name);
 static void launch_bin(const char *spec);
+static struct win *term_win(void);
+static void term_hide_cursor(struct win *w);
 static void c_launch(const char *app) { launch(app); }
 static void c_run_basic(const char *line)
 {
@@ -955,6 +957,42 @@ static void bw_stop(struct wctx *c)
     binwin_clear();
 }
 
+/* .BIN de bas2bin: su runtime lleva la extension 'B2BP' (empaquetado) o 'B2BN' (nativo) en los primeros 8 KB */
+static int is_b2b(const u8 *b, int n)
+{
+    int i;
+    for (i = 16; i + 4 <= n && i < 8192; i += 4) {
+        u32 m = (u32)b[i] | (u32)b[i + 1] << 8 | (u32)b[i + 2] << 16 | (u32)b[i + 3] << 24;
+        if (m == 0x50423242u || m == 0x4E423242u)
+            return 1;
+    }
+    return 0;
+}
+
+static u32 b2b_entry;                               /* .BIN de bas2bin cargado, esperando al bucle principal */
+static int b2b_running;                             /* ... o ya corriendo: nadie mas puede cargar en 0x9000000 */
+
+static void run_b2b(void)
+{
+    struct win *w = term_win();
+    u32 e = b2b_entry;
+    b2b_entry = 0;
+    if (!w || K->basic_busy())
+        return;
+    set_focus((int)(w - wins));
+    term_hide_cursor(w);
+    w->busy = 1;
+    b2b_running = 1;
+    K->con_select(w->term);
+    ((int (*)(const struct kapi *))(unsigned long)e)(K);
+    K->con_select(0);
+    b2b_running = 0;
+    w->busy = 0;
+    if (K->ver >= 8 && K->task) K->task(TASK_KILLRANGE, (void (*)(void *))0x9000000ul, (void *)0xB000000ul, 0);
+    if (w->closing)
+        win_close((int)(w - wins));
+}
+
 static void launch_bin(const char *spec)
 {
     const char *busy = binwin_busy(0x40000000ull);
@@ -962,6 +1000,8 @@ static void launch_bin(const char *spec)
     char name[16];
     unsigned total = 0;
     int n, i, k = 0, r;
+    if (b2b_running || b2b_entry)                   /* un juego de bas2bin ocupa 0x9000000 (el doble clic llega aqui 2 veces) */
+        return;
     for (i = 0; spec[i]; i++)                       /* nombre = lo que va despues de la ultima / o : */
         if (spec[i] == '/' || spec[i] == ':')
             k = i + 1;
@@ -981,6 +1021,13 @@ static void launch_bin(const char *spec)
         h->end > BIN_BASE + BIN_MAX || h->end < BIN_BASE + (unsigned)n || h->entry < BIN_BASE || h->entry >= BIN_BASE + (unsigned)n)
         return;
     memset((void *)(unsigned long)(BIN_BASE + (unsigned)n), 0, h->end - (BIN_BASE + (unsigned)n));
+    if (is_b2b((const u8 *)(unsigned long)BIN_BASE, n)) {
+        /* programa BASIC hecho con bas2bin (un juego con BMG...): corre en una terminal, como si se escribiera RUN.
+         * Aqui estamos dentro del tic del escritorio: se arranca desde el bucle principal (run_b2b) */
+        if (!K->basic_busy())
+            b2b_entry = h->entry;
+        return;
+    }
     r = ((int (*)(const struct kapi *))(unsigned long)h->entry)(K);
     if (r != MOD_WINAPP)
         if (K->ver >= 8 && K->task) K->task(TASK_KILLRANGE, (void (*)(void *))0x9000000ul, (void *)0xB000000ul, 0);   /* sus tareas se van con el */
@@ -1490,6 +1537,8 @@ int mod_main(const struct kapi *api)
             break;
         if (k)
             dispatch_key(k);
+        if (b2b_entry)
+            run_b2b();
         if (pend_set) {
             char line[128];
             struct win *w = term_win();

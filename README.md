@@ -96,7 +96,10 @@ PKG, INSTALL) se compila para 32 bits.
 | `fs.c` | Lectura de FAT12/16/32 e ISO9660 sobre cualquier disco |
 | `usb.c` / `mmio.c` | Driver EHCI + almacenamiento masivo (BOT/SCSI); `map_mmio` mapea registros sin caché |
 | `hda.c` | Audio Intel HDA: CORB/RIRB, descubre la ruta pin→DAC y reproduce un tono por DMA |
-| `task.c` | Tareas cooperativas (`K->task`, comando `TAREAS`): pila y registros por tarea, cambio en `kbd_poll()` |
+| `task.c` | Tareas (`K->task`, comando `TAREAS`): pila y registros por tarea, cambio en `kbd_poll()` o por el reloj (preempción) |
+| `irq.c` | interrupciones: IDT, TSS (pila IST), PIC, PIT a 1000 Hz, `hlt` al esperar, preempción de tareas, pantalla de error, BIOS con su PIC/IVT |
+| `bmg.c` | BMG, motor de juegos de BASIC: sprites con fondo guardado, `FRAME`, `HIT`; `KEYDOWN` sale de `kbd.c` |
+| `tools/bmg/` | juegos de ejemplo en BASIC para la tienda (`cometas.bas` -> `store/COMETAS.BIN`, `make juegos`) |
 | `ram.c` | Bancos de RAM de 32 MB (`K->ram`, comando `RAM`) y mapeo de toda la RAM sobre 1 GB |
 | `kbd.c` | Teclado PS/2 (set 1) con tres distribuciones: ES (España), LA (latinoamericana) y US. Se elige al arrancar con las flechas o con `KEYB`; sin teclas muertas. Letras en MAYÚSCULAS; Shift o Bloq Mayús = minúsculas. Cursor parpadeante |
 | `lib.c` | `memset`, `memcpy`, `memmove`, `memcmp`, `strlen` |
@@ -130,6 +133,7 @@ clásico (`?SYNTAX  ERROR IN 10`, `BREAK IN 20`, ...). **ESC** interrumpe un pro
 `PLOT x,y[,c]`, `LINE x1,y1,x2,y2[,c]`, `BOX x1,y1,x2,y2[,c[,relleno]]`, `CIRCLE x,y,r[,c]`.
 El color `c` es del C64 (0-15); sin él se usa el color del texto. Los gráficos se dibujan sobre la pantalla:
 el texto tapa los píxeles de su celda y `CLS` o el scroll los borran.
+**Juegos (BMG):** `SPRITE DEF/ROW/COPY/OFF`, `SPRITE n,x,y`, `FRAME [fps]`, `HIT(a,b)`, `KEYDOWN(k)` (ver [BMG](#bmg-motor-de-juegos-para-basic-basic-os-motor-game)).
 
 **Guardar y cargar:** `SAVE "nombre"`, `LOAD "nombre"`, `DIR`, `SCRATCH "nombre"` (o `DELETE`). Los programas se
 guardan como texto en una zona reservada de la propia imagen de arranque (sectores 512 a 2759 de la imagen,
@@ -302,6 +306,7 @@ make bas2bin                                   # tools/bas2bin/bas2bin
 tools/bas2bin/bas2bin JUEGO.BAS JUEGO.BIN      # nativo (por defecto)
 tools/bas2bin/bas2bin -p JUEGO.BAS JUEGO.BIN   # empaquetado
 ```
+Con líneas `REM ICONO "NOMBRE"` y `REM ICB ...` el `.BIN` sale con icono de escritorio (ver [BMG](#bmg-motor-de-juegos-para-basic-basic-os-motor-game)).
 En el sistema: `PKG`, tecla **C**, el nombre de un programa guardado con `SAVE` o la ruta de un `.BAS`
 (`HD0.1:DEMO.BAS`), y el modo. El `.BIN` queda en `HDn.1:/APPS/` y aparece en la lista; con **S** se sube.
 
@@ -346,23 +351,81 @@ los primeros que estén libres; si ya están ocupados salta a los siguientes, ha
 - Lo siguiente: que PKG, FORO, COSMOS, PLAY y NET.BIN también pidan bancos (así se podrán usar mientras MPLAY está abierto) y que los
   `.BIN` traigan tabla de reubicación para correr en cualquier banco, no solo en el 0.
 
-## Tareas (las bases de los procesos, comando TAREAS)
-BASIC-OS todavía no tiene procesos de verdad: el escritorio es un solo ciclo que llama a cada ventana. Esto es lo primero para
-que deje de trabarse:
+## Tareas y procesos (comando TAREAS)
+BASIC-OS todavía no tiene procesos completos (cada programa con su memoria), pero ya tiene sus dos primeras capas:
 
 - **El escritorio ya no se congela cuando una ventana tarda.** Si una ventana se queda trabajando (COSMOS bajando una página,
   por ejemplo) y mientras tanto el sistema revisa el teclado, el escritorio hace un "servicio anidado": mueve el ratón, pinta las
   demás ventanas y el fondo (MPLAY sigue reproduciendo, el cubo sigue girando). A la ventana ocupada no se le manda nada ni se deja
   cerrar hasta que termine, y mientras tanto no se abren programas nuevos (podrían pisar su memoria o la de NET).
-- **Tareas cooperativas en el kernel** (`task.c`, kapi v8): cada tarea tiene su pila (1 MB, de un banco de RAM `TAREAS`) y sus
+- **Tareas en el kernel** (`task.c`, kapi v8): cada tarea tiene su pila (1 MB, de un banco de RAM `TAREAS`) y sus
   registros. La CPU cambia de tarea cada vez que alguien espera (el kernel llama a `task_yield()` desde `kbd_poll()`, que es lo que
   usan todos los bucles que esperan teclas, el escritorio e iPXE). `TAREAS` (o `PS`) en BASIC muestra la lista con su estado.
   `K->task(TASK_NEW, fn, arg, "NOMBRE")` crea una, `TASK_YIELD` cede la CPU, `TASK_SLEEP` duerme, `TASK_EXIT`/`TASK_KILL` terminan.
   Cuando un programa de la tienda se cierra, PKG y el escritorio terminan las tareas que dejó (su código se va a borrar).
+- **Interrupciones y multitarea preemptiva** (`irq.c`, solo 64 bits). El kernel ya tiene IDT, TSS y el reloj (PIT) a 1000 Hz:
+  - **La CPU descansa.** Los bucles que esperan (el cursor de BASIC, `SLEEP`, el escritorio, `FRAME`) hacen `hlt` hasta el siguiente
+    milisegundo en vez de dar vueltas: QEMU pasa de ~98% de CPU a ~0% con BASIC esperando, y a ~7% jugando COMETAS.
+  - **Preempción:** cada 10 ms, si la tarea está corriendo código de un programa (dirección >= 0x9000000) y hay otra lista, el reloj
+    le quita la CPU aunque nunca ceda (se guardan todos los registros, también SSE con `fxsave`). El código del kernel no se interrumpe
+    para cambiar de tarea ("candado grande"): así no hacen falta candados por todo el kernel. El reloj usa su propia pila (IST) para
+    no pisar la zona roja de 128 bytes de los programas compilados con gcc (MPLAY).
+  - **Las llamadas a la BIOS** (los discos que se leen por INT 13h) devuelven el PIC, el PIT y la tabla de interrupciones a como los
+    espera la BIOS y luego los vuelven a poner; Linux (BASHTERM, Tiny Core) arranca igual que antes.
+  - **Pantalla de error.** Una excepción (división entre cero, fallo de página, protección general...) ya no reinicia la máquina de
+    golpe: sale una pantalla con el nombre de la excepción, RIP, RSP, registros, lo de arriba de la pila y si fue en un programa de la
+    tienda; una tecla reinicia. Si pasa en el escritorio, primero vuelve a la consola para que se vea.
+  - En 32 bits todo sigue como antes (sondeo, sin `hlt`).
 - **En C con BCC:** `bos_tarea(funcion, arg, "NOMBRE")` (la función lleva `__callback`), `bos_ceder()`, `bos_dormir(ms)`,
-  `bos_tarea_matar(n)`, `bos_tarea_actual()`.
-- **Lo que sigue:** que el reloj (PIT) cambie de tarea solo cada pocos milisegundos (multitarea preemptiva), y que cada programa
-  corra en su banco de RAM (tabla de reubicación) para que varios `.BIN` vivan a la vez.
+  `bos_tarea_matar(n)`, `bos_tarea_actual()`. Con la preempción, una tarea que da vueltas sin ceder ya no traba a las demás
+  (prueba: tres bucles que nunca ceden reciben 20 turnos cada uno en un segundo).
+- **Lo que sigue:** que cada programa corra en su propio banco de RAM (tabla de reubicación) para que varios `.BIN` vivan a la vez,
+  y luego memoria separada por programa.
+
+## BMG: motor de juegos para BASIC (BASIC-OS Motor Game)
+`bmg.c` le da a BASIC sprites con fondo que se repone solo, cuadros a ritmo fijo, choques y teclas apretadas. Funciona a pantalla
+completa y dentro de una terminal del escritorio.
+
+| Instrucción | Qué hace |
+|---|---|
+| `SPRITE DEF n, ancho, alto [, zoom]` | define el sprite `n` (0-31), hasta 32x32; `zoom` 1-4 lo dibuja más grande (con 2, un 16x16 ocupa 32x32) |
+| `SPRITE ROW n, fila, "0011.."` | una fila del dibujo: un dígito hex por pixel = color del C64 (0-F); `.` o espacio = transparente |
+| `SPRITE COPY destino, origen` | copia el dibujo (varios enemigos iguales) |
+| `SPRITE n, x, y` | lo pone en `x,y` (se ve en el siguiente `FRAME`) |
+| `SPRITE OFF n` / `SPRITE OFF` | lo quita (o todos) |
+| `FRAME [fps]` | dibuja los sprites donde quedaron y espera al siguiente cuadro (30 por segundo, o los que digas). Lo que había debajo de cada sprite se guarda y se repone al moverlo: el fondo de `PLOT`/`LINE`/`BOX` no se borra |
+| `HIT(a, b)` | -1 si los sprites `a` y `b` se tocan (pixel a pixel, lo transparente no cuenta), 0 si no |
+| `KEYDOWN(k)` | -1 si la tecla está apretada **ahora** (para mover sin esperar la repetición): `k` = `ASC` de la letra, 32 espacio, 13 Enter, 145/17/157/29 flechas arriba/abajo/izquierda/derecha, 256+n = scancode n |
+
+`RUN` borra los sprites de la corrida anterior y `CLS` olvida lo que había debajo. Lo guardado y los dibujos ampliados van en un banco
+de RAM `BMG` (se pide la primera vez). Un juego típico:
+
+```basic
+10 SPRITE DEF 0,8,8,2
+20 FOR N=0 TO 7:SPRITE ROW 0,N,"..1111..":NEXT N
+30 X=100
+40 IF KEYDOWN(157) THEN X=X-4
+50 IF KEYDOWN(29) THEN X=X+4
+60 SPRITE 0,X,200:FRAME:GOTO 40
+```
+
+**COMETAS** (`tools/bmg/cometas.bas`, `store/COMETAS.BIN`) es el juego de ejemplo: flechas para mover la nave, espacio para disparar,
+3 vidas y sube de nivel cada 100 puntos. Se baja con PKG y aparece en el escritorio con su icono; con doble clic corre en una terminal.
+`make juegos` lo vuelve a compilar.
+
+**Juegos de BASIC con icono.** bas2bin ahora mete un icono de escritorio en el `.BIN` si el programa trae estas líneas (el intérprete
+las ignora porque son `REM`):
+
+```basic
+1 REM ICONO "COMETAS"
+2 REM ICB ......CCCC......
+3 REM ICB ....CCFFFFCC....
+...
+```
+
+`REM ICONO` es el nombre bajo el icono y cada `REM ICB` una fila del dibujo (igual que un `.ICB`: dígito hex = color, `.` = nada;
+16x16 queda bien). Funciona con `tools/bas2bin/bas2bin` en Linux y con la tecla **C** de PKG. Cuando el escritorio abre un `.BIN` de
+bas2bin, lo corre en una terminal (como si escribieras `RUN`); mientras corre no se abre otro programa de la tienda encima.
 
 ## Teclado (KEYB)
 Al arrancar, después de la pantalla de carga, aparece un menú para elegir el teclado con las **flechas** y **Enter**:

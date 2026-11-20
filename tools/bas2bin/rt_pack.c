@@ -3,6 +3,11 @@
 #include "kapi.h"
 #include "mod_head.h"
 #include "tools/bas2bin/b2b.h"
+#include "sys/binicon.h"
+
+/* lugar para el icono del escritorio: bas2bin lo llena si el programa trae lineas REM ICONO / REM ICB */
+__attribute__((section(".header.icon"), used, aligned(4)))
+static const struct bin_icon b2b_icon_slot = { B2B_ISLOT, "", "" };
 
 struct b2b_pext b2b_ext = { B2B_PMAGIC, 0, 0, 0 };     /* text/len los llena el compilador */
 

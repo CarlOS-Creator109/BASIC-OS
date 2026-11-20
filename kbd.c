@@ -173,6 +173,45 @@ static void gui_tick(void)
     busy = 0;
 }
 
+/* teclas apretadas ahora mismo (para juegos: KEYDOWN de BASIC, BMG). Se lleva por scancode: el de 1 byte y el
+ * extendido (E0 xx: flechas...) por separado */
+static u8 held[128], held_e[128], held_pfx;
+
+static void track_held(u8 sc)
+{
+    if (sc == 0xE0) { held_pfx = 1; return; }
+    if (sc == 0xE1) return;                     /* Pausa: se ignora */
+    if (held_pfx) held_e[sc & 0x7F] = !(sc & 0x80);
+    else held[sc & 0x7F] = !(sc & 0x80);
+    held_pfx = 0;
+}
+
+/* code: letra o simbolo (su ASCII; da igual mayuscula o minuscula), 13 Enter, 32 espacio, flechas con los codigos
+ * PETSCII que da INKEY (145 arriba, 17 abajo, 157 izquierda, 29 derecha), 256+n = scancode n tal cual */
+int kbd_held(int code)
+{
+    int sc;
+    if (code >= 256 && code < 384) return held[code - 256];
+    switch (code) {
+    case 145: return held_e[0x48];
+    case 17:  return held_e[0x50];
+    case 157: return held_e[0x4B];
+    case 29:  return held_e[0x4D];
+    case 13:  return held[0x1C] || held_e[0x1C];
+    case 32:  return held[0x39];
+    case 27:  return held[0x01];
+    case 9:   return held[0x0F];
+    case 8:   return held[0x0E];
+    }
+    if (code >= 'a' && code <= 'z') code -= 32;
+    for (sc = 1; sc < 0x57; sc++) {
+        int c = map_n[sc];
+        if (c >= 'a' && c <= 'z') c -= 32;
+        if (c && c == code) return held[sc];
+    }
+    return 0;
+}
+
 void kbd_poll(void)
 {
     audio_service();                    /* el sonido sigue mientras BASIC espera o calcula */
@@ -186,6 +225,7 @@ void kbd_poll(void)
             mouse_byte(sc);
             continue;
         }
+        track_held(sc);
         if (raw_on) {                   /* modo crudo: el scancode va a su cola, sin interpretar */
             int n = (rawh + 1) & (RQSIZE - 1);
             if (n != rawt) {
@@ -313,7 +353,7 @@ int kbd_getc(void)
             vga_cursor_show(on);
             next = rdtsc() + blink_cycles;
         }
-        __asm__ volatile("pause");
+        cpu_idle();                             /* hlt hasta el siguiente milisegundo (o pause sin reloj) */
     }
 }
 

@@ -33,7 +33,7 @@ LIBO    := lib.o
 endif
 LDFLAGS := -m $(LDEMU) -z max-page-size=0x1000 -T linker.ld -nostdlib -z noexecstack --no-warn-rwx-segments
 
-OBJS := $(ENTRYO) kernel.o vga.o kbd.o $(LIBO) ram.o task.o sysinfo.o basic.o store.o pci.o mouse.o bios.o blk.o fs.o mmio.o usb.o \
+OBJS := $(ENTRYO) kernel.o vga.o kbd.o $(LIBO) ram.o task.o irq.o bmg.o sysinfo.o basic.o store.o pci.o mouse.o bios.o blk.o fs.o mmio.o usb.o \
         hda.o ac97.o audio.o atapi.o cd.o sys.o module.o fb.o
 
 # todas las versiones; la de video solo si hay un .BVC (make VIDEO=mi.bvc)
@@ -183,7 +183,7 @@ store/$(shell echo $(1) | tr a-z A-Z).BIN: apps/$(1).c kapi.h mod_head.h sys/ui.
 	objcopy -O binary apps/$(1).elf $$@
 endef
 $(foreach a,$(STOREAPPS),$(eval $(call STOREAPP,$(a))))
-store: $(foreach a,$(STOREAPPS),store/$(shell echo $(a) | tr a-z A-Z).BIN)
+store: $(foreach a,$(STOREAPPS),store/$(shell echo $(a) | tr a-z A-Z).BIN) store/COMETAS.BIN
 
 # BCC (BASIC-OS COMPILER C): compilador de C que escribe .BIN de la tienda. tools/bcc/bcc es la version de Linux
 #   (bcc hola.c -o HOLA.BIN), tools/bcc/bccrun corre un .BIN en Linux para probar y store/BCC.BIN es el que va
@@ -248,6 +248,12 @@ $(B2B)/bas2bin: $(B2B)/main.c $(B2B)/b2b.c $(B2B)/b2b.h $(B2B)/b2b_blobs.h
 $(SYSDIR)/pkg.o: $(B2B)/b2b.c $(B2B)/b2b.h $(B2B)/b2b_blobs.h
 bas2bin: $(B2B)/bas2bin
 
+# ---- BMG (BASIC-OS Motor Game): juegos de ejemplo en BASIC (tools/bmg/*.bas) -> store/ con icono de escritorio.
+#      Van empaquetados (-p): todo el BASIC y corren tambien en 32 bits. ----
+store/COMETAS.BIN: tools/bmg/cometas.bas $(B2B)/bas2bin
+	$(B2B)/bas2bin -p $< $@
+juegos: store/COMETAS.BIN
+
 # ---- super-basicos.img: menu de arranque + PC BASIC 64 + PC BASIC 32 + una FAT16 compartida ----
 SUPERDIR := tools/super
 $(SUPERDIR)/hook.bin: $(SUPERDIR)/hook.asm
@@ -298,4 +304,4 @@ clean:
 	rm -f *.o *.elf *.bin pc-basic.img pc-basic-doom.img $(SYSDIR)/*.o $(SYSDIR)/*.elf $(SYSDIR)/*.SYS $(SYSDIR)/*.APP apps/*.o apps/*.elf
 	$(MAKE) -C test clean
 
-.PHONY: all 64 32 doom video super bas2bin run run32 test clean store net
+.PHONY: all 64 32 doom video super bas2bin juegos run run32 test clean store net

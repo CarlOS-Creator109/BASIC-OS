@@ -446,6 +446,24 @@ static int primary(void)
     if (kw("MOUSEX")) return plat_mouse(0);
     if (kw("MOUSEY")) return plat_mouse(1);
     if (kw("MOUSEB")) return plat_mouse(2);
+    if (kw("KEYDOWN")) { v = paren_arg(); return plat_keydown(v) ? -1 : 0; }
+    if (kw("HIT")) {                        /* HIT(a, b): los sprites a y b se tocan (BMG) */
+        int a, b;
+        skip_ws();
+        if (*tp != '(') { fail("SYNTAX  ERROR"); return 0; }
+        tp++;
+        a = expr();
+        skip_ws();
+        if (*tp != ',') { fail("SYNTAX  ERROR"); return 0; }
+        tp++;
+        b = expr();
+        skip_ws();
+        if (*tp != ')') { fail("SYNTAX  ERROR"); return 0; }
+        tp++;
+        v = plat_bmg(7, a, b, 0, 0);
+        if (v < 0) { fail("ILLEGAL QUANTITY  ERROR"); return 0; }
+        return v ? -1 : 0;
+    }
     if (kw("CDTRACK") || kw("CDTIME")) {
         int t = 0, sec = 0;
         int isTrack = tp[-1] == 'K' || tp[-1] == 'k';
@@ -1292,6 +1310,54 @@ static void st_exec(void)
         exec_fail(r);
 }
 
+/* ---- BMG (BASIC-OS Motor Game, bmg.c): SPRITE, FRAME, HIT(), KEYDOWN() ---- */
+static void bmg_fail(int r)
+{
+    if (r == -3) fail("NO GRAPHICS MODE  ERROR");
+    else if (r < 0) fail("ILLEGAL QUANTITY  ERROR");
+}
+
+static int stmt_end(void)
+{
+    skip_ws();
+    return *tp == 0 || *tp == ':';
+}
+
+static void st_sprite(void)
+{
+    int v[3];
+    skip_ws();
+    if (kw("DEF")) {
+        int w[4], n = get_args(w, 3, 4);
+        char z[2];
+        z[0] = (char)(n > 3 ? (w[3] < 1 || w[3] > 4 ? 0 : w[3]) : 1);
+        z[1] = 0;
+        if (n) bmg_fail(plat_bmg(1, w[0], w[1], w[2], z));
+    } else if (kw("ROW")) {
+        char t[STR_MAX + 1];
+        if (!get_args(v, 2, 2)) return;
+        skip_ws();
+        if (*tp != ',') { fail("SYNTAX  ERROR"); return; }
+        tp++;
+        sexpr(t);
+        if (!err) bmg_fail(plat_bmg(2, v[0], v[1], 0, t));
+    } else if (kw("COPY")) {
+        if (get_args(v, 2, 2)) bmg_fail(plat_bmg(5, v[0], v[1], 0, 0));
+    } else if (kw("OFF")) {
+        if (stmt_end()) plat_bmg(4, -1, 0, 0, 0);
+        else if (get_args(v, 1, 1)) bmg_fail(plat_bmg(4, v[0], 0, 0, 0));
+    } else if (get_args(v, 3, 3)) {
+        bmg_fail(plat_bmg(3, v[0], clamp16(v[1]), clamp16(v[2]), 0));
+    }
+}
+
+static void st_frame(void)
+{
+    int fps = 0;
+    if (!stmt_end()) fps = expr();
+    if (!err) bmg_fail(plat_bmg(6, fps, 0, 0, 0));
+}
+
 static void st_locate(void)
 {
     int c = expr(), r = 0;
@@ -1617,6 +1683,7 @@ static void st_run(void)
     if (is_digit(*tp))
         n = expr();
     clear_state();
+    plat_bmg(0, 0, 0, 0, 0);                /* RUN: sin sprites de la corrida anterior */
     if (n >= 0) {
         do_goto(n);
         return;
@@ -1639,6 +1706,8 @@ static void st_help(void)
     puts_("PLOT X,Y[,C]  LINE X1,Y1,X2,Y2[,C]\n");
     puts_("BOX X1,Y1,X2,Y2[,C[,FILL]]  CIRCLE X,Y,R[,C]\n");
     puts_("BEEP [MS[,HZ]]  AUDIO  XMAX YMAX (PIXELS)\n");
+    puts_("BMG: SPRITE DEF N,W,H[,ZOOM]  SPRITE ROW N,Y,\"0F.\"  SPRITE N,X,Y\n");
+    puts_("SPRITE OFF [N]  SPRITE COPY A,B  FRAME [FPS]  HIT(A,B)  KEYDOWN(K)\n");
     puts_("SAVE \"N\"  LOAD \"N\"  DIR  SCRATCH \"N\"\n");
     puts_("DRIVES  DIR \"HD0:\"  TYPE \"HD0:F.TXT\"  LOAD \"HD0:F.BAS\"\n");
     puts_("SOUND SINE|SQUARE|TRIANGLE|SAW,HZ,MS\n");
@@ -1949,6 +2018,10 @@ static void exec_statement(void)
         st_locate();
     } else if (kw("SLEEP")) {
         st_sleep();
+    } else if (kw("SPRITE")) {
+        st_sprite();
+    } else if (kw("FRAME")) {
+        st_frame();
     } else if (kw("POKE")) {
         st_poke();
     } else if (kw("LIST")) {
