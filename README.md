@@ -290,9 +290,16 @@ Probado en QEMU (`-nic user,model=e1000`): DHCP da 10.0.2.15, el ping responde 4
 **Ojo con las mayúsculas:** BASIC pasa las cadenas a mayúsculas, así que una ruta como `/hola.txt` llega como `/HOLA.TXT`
 (igual que en `NET`/iPXE). Para servidores que distinguen mayúsculas, usa Shift en la consola o nombres en mayúsculas.
 
-**El plan:** falta el **TLS propio** (parte 3) para jubilar a iPXE del todo. Mientras tanto iPXE (`NET`, abajo) se queda
-como la opción para **HTTPS**, así PKG, FORO y COSMOS siguen con Render y GitHub hasta que BN sepa cifrar. Todavía no hay
-Wi-Fi: BN es por cable / QEMU.
+**El plan — TLS propio (parte 3), por partes:**
+- **3a (hecho):** los ladrillos de criptografía, en C puro (`tools/bn/crypto.c`), sin librerías: **SHA-256, HMAC-SHA256,
+  HKDF** (el *key schedule* de TLS 1.3), **AES-128 y AES-128-GCM** (la suite `TLS_AES_128_GCM_SHA256`) y **X25519** (el
+  intercambio de claves). Cada uno probado contra sus vectores oficiales (FIPS-197, RFC 4231/5869/7748, NIST GCM) con
+  `make bn-crypto-test`.
+- **3b:** el handshake TLS 1.3 (ClientHello/ServerHello, derivar las claves, descifrar los records) contra un servidor real.
+- **3c:** parsear el certificado X.509, verificar la firma (ECDSA P-256 / RSA-PSS) y la cadena hasta una raíz de confianza.
+
+Mientras tanto iPXE (`NET`, abajo) se queda como la opción para **HTTPS**, así PKG, FORO y COSMOS siguen con Render y
+GitHub hasta que BN sepa cifrar. Todavía no hay Wi-Fi: BN es por cable / QEMU.
 
 ## Red (NET) — iPXE, por ahora para HTTPS
 `NET` carga `NET.BIN` (iPXE portado: drivers e1000/e1000e/rtl81xx/pcnet/virtio y muchos mas, TCP/IP, HTTP, **HTTPS**, DHCP, DNS, NTP, ping)

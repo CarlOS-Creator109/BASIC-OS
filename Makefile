@@ -252,6 +252,13 @@ tools/bfstest: tools/bfstest.c bfs.c bfs.h
 	cc -O2 -Wall -I. -DBFS_HOST -o $@ tools/bfstest.c bfs.c
 bfs-test: tools/bfstest
 	for s in 1 2 3; do tools/bfstest $$s || exit 1; done
+
+# ---- criptografia de BN (para el TLS propio, parte 3): SHA-256, HMAC, HKDF, AES-128, AES-GCM, X25519.
+#      make bn-crypto-test las prueba contra sus vectores oficiales (FIPS, RFC 4231/5869/7748, NIST GCM). ----
+tools/bn/crypttest: tools/bn/crypttest.c tools/bn/crypto.c tools/bn/crypto.h
+	cc -O2 -I tools/bn -o $@ tools/bn/crypttest.c tools/bn/crypto.c
+bn-crypto-test: tools/bn/crypttest
+	tools/bn/crypttest
 BFS_MB ?= 1024
 basic-os-bfs.img: pc-basic.img DOOM.BIN COSMOS.BIN BN.BIN tools/mkbfs $(WAD) store/COMETAS.BIN
 	rm -f $@
@@ -366,10 +373,10 @@ test:
 
 clean:
 	rm -rf build32 pc-basic32.img build-super super-basicos.img $(SUPERDIR)/*.bin
-	rm -f tools/mkbashimg tools/mkbvc tools/bvcplay tools/mkbfs tools/bfstest basic-os-bfs.img BN.BIN tools/bn/bn.o tools/bn/bn.elf
+	rm -f tools/mkbashimg tools/mkbvc tools/bvcplay tools/mkbfs tools/bfstest tools/bn/crypttest basic-os-bfs.img BN.BIN tools/bn/bn.o tools/bn/bn.elf
 	rm -f $(CMDIR)/*.o $(CMDIR)/cosmos.elf COSMOS.BIN
 	rm -f $(B2B)/*.o $(B2B)/*.elf $(B2B)/*.bin $(B2B)/b2b_blobs.h $(B2B)/bas2bin
 	rm -f *.o *.elf *.bin pc-basic.img pc-basic-doom.img $(SYSDIR)/*.o $(SYSDIR)/*.elf $(SYSDIR)/*.SYS $(SYSDIR)/*.APP apps/*.o apps/*.elf
 	$(MAKE) -C test clean
 
-.PHONY: all 64 32 doom video videos bfs bfs-test super bas2bin juegos run run32 test clean store net
+.PHONY: all 64 32 doom video videos bfs bfs-test bn-crypto-test super bas2bin juegos run run32 test clean store net
