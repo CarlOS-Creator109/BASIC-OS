@@ -16,6 +16,7 @@
  */
 #include "kapi.h"
 #include "mod_head.h"
+#include "tls.h"
 
 typedef unsigned char u8;
 typedef unsigned short u16;
@@ -112,8 +113,19 @@ static u8 *txbuf;
 static u8 *httpbuf;                     /* cuerpo de la respuesta HTTP, en el banco */
 #define HTTPMAX (8u * 1024 * 1024)
 static u32 rx_tail, tx_tail;
-static u8  mac[6];
+static u8  mac[6];           /* la que usamos (con la firma IMBOS) */
+static u8  real_mac[6];      /* la que trae la tarjeta */
 static u64 net_bank;
+
+/* firma secreta IMBOS ("soy BOS"): se mezcla (XOR) con la MAC real, no se ve a simple vista; la tarjeta manda con ella */
+static void imbos_mac(void)
+{
+    static const char sig[6] = { 'I','M','B','O','S', 'I'^'M'^'B'^'O'^'S' };
+    int i;
+    for (i = 0; i < 6; i++) real_mac[i] = mac[i];
+    for (i = 0; i < 6; i++) mac[i] ^= (u8)sig[i];
+    mac[0] = (u8)((mac[0] | 0x02) & ~0x01);     /* unicast + administrada localmente (MAC valida) */
+}
 
 static u32 rr(u32 r) { return *(volatile u32 *)(mmio + r); }
 static void wr(u32 r, u32 v) { *(volatile u32 *)(mmio + r) = v; }
@@ -179,6 +191,7 @@ static int nic_init(void)
         } else {
             for (i = 0; i < 3; i++) { if (eeprom(i, &w)) { pr("BN: no pude leer la MAC\n"); return 1; } mac[2*i] = (u8)w; mac[2*i+1] = (u8)(w >> 8); }
         }
+        imbos_mac();                                /* firma secreta: soy BOS */
         wr(REG_RAL0, (u32)mac[0] | mac[1] << 8 | mac[2] << 16 | (u32)mac[3] << 24);
         wr(REG_RAH0, (u32)mac[4] | mac[5] << 8 | 0x80000000u);
     }
@@ -514,6 +527,7 @@ static u32 dns_resolve(const char *name)
 /* ================================================================= TCP ============ */
 static u32 t_peer, t_lport, t_rport, t_snd, t_rcv;
 static int t_state;                     /* 0 cerrado, 1 establecido, 2 el otro cerro (FIN) */
+static u8 sb[2048]; static int sb_len, sb_pos;   /* buffer de sobra de la lectura en flujo */
 
 static u16 tcp_cksum(const u8 *seg, int n, u32 src, u32 dst)
 {
@@ -570,6 +584,7 @@ static int tcp_connect(u32 ip, u16 port)
     int try_, sl;
     t_peer = ip; t_rport = port; t_lport = 20000 + (K->seed() & 0x3FFF);
     t_snd = K->seed() ^ (K->ms() << 3); t_rcv = 0; t_state = 0;
+    sb_len = sb_pos = 0;
     for (try_ = 0; try_ < 5; try_++) {
         if (tcp_out(0x02, 0, 0, 1)) return 1;       /* SYN */
         while (tcp_in(800, &sl)) {
@@ -629,17 +644,48 @@ static void tcp_close(void)
     t_state = 0;
 }
 
+/* ---- lectura/escritura en flujo (lo usa el TLS) ---- */
+static int tcp_stream_read(u8 *out, int max)
+{
+    int sl;
+    if (sb_pos < sb_len) { int t = sb_len - sb_pos; if (t > max) t = max; memcpy(out, sb + sb_pos, t); sb_pos += t; return t; }
+    if (t_state == 2) return 0;
+    for (;;) {
+        if (!tcp_in(8000, &sl)) return -1;
+        int thl = (tcpseg[12] >> 4) * 4, dn = sl - thl; u8 fl = tcpseg[13]; u32 seq = rd32(tcpseg + 4);
+        if (fl & 0x04) { t_state = 0; return 0; }               /* RST */
+        if (dn > 0 && seq == t_rcv) {
+            t_rcv += dn;
+            if (fl & 0x01) { t_rcv += 1; t_state = 2; }
+            tcp_out(0x10, 0, 0, 0);
+            if (dn > max) { memcpy(out, tcpseg + thl, max); sb_len = dn - max; memcpy(sb, tcpseg + thl + max, sb_len); sb_pos = 0; return max; }
+            memcpy(out, tcpseg + thl, dn); return dn;
+        }
+        if (dn > 0) tcp_out(0x10, 0, 0, 0);                     /* fuera de orden: re-ACK */
+        if (fl & 0x01) { t_rcv += 1; tcp_out(0x10, 0, 0, 0); t_state = 2; return 0; }
+    }
+}
+static int tcp_stream_write(const u8 *data, int n)
+{
+    int off = 0;
+    while (off < n) { int c = n - off; if (c > 1400) c = 1400; if (tcp_out(0x18, data + off, c, 0)) return -1; t_snd += c; off += c; }
+    return 0;
+}
+static int io_send(void *x, const u8 *p, int n) { (void)x; return tcp_stream_write(p, n) ? -1 : n; }
+static int io_recv(void *x, u8 *p, int n) { (void)x; return tcp_stream_read(p, n); }
+static tls_conn tlsc;
+
 /* ================================================================= HTTP ============ */
 /* separa "http://host[:port]/ruta" ; devuelve 0 si ok */
-static int url_parse(const char *url, char *host, int hmax, u16 *port, const char **path)
+static int url_parse(const char *url, char *host, int hmax, u16 *port, const char **path, int *tls)
 {
     int i = 0;
-    *port = 80;
-    if (istarts(url, "http://")) url += 7;
-    else if (istarts(url, "https://")) { pr("BN: HTTPS todavia no (usa NET/iPXE); BN solo hace HTTP por ahora\n"); return 1; }
+    *tls = 0; *port = 80;
+    if (istarts(url, "https://")) { url += 8; *tls = 1; *port = 443; }
+    else if (istarts(url, "http://")) url += 7;
     while (url[i] && url[i] != '/' && url[i] != ':' && i < hmax - 1) { host[i] = url[i]; i++; }
     host[i] = 0;
-    if (url[i] == ':') { u16 p = 0; i++; while (url[i] >= '0' && url[i] <= '9') { p = (u16)(p * 10 + (url[i] - '0')); i++; } *port = p ? p : 80; }
+    if (url[i] == ':') { u16 p = 0; i++; while (url[i] >= '0' && url[i] <= '9') { p = (u16)(p * 10 + (url[i] - '0')); i++; } *port = p ? p : *port; }
     *path = url[i] ? url + i : "/";
     return host[0] ? 0 : 1;
 }
@@ -668,23 +714,36 @@ static u32 host_ip(const char *host)
 }
 static int do_get(const char *url)
 {
-    char host[128]; const char *path; u16 port; u32 ip;
+    char host[128]; const char *path; u16 port; u32 ip; int use_tls;
     static char req[400];
     int rl = 0, i, bodyn;
-    if (url_parse(url, host, sizeof host, &port, &path)) return 1;
+    if (url_parse(url, host, sizeof host, &port, &path, &use_tls)) return 1;
     ip = host_ip(host);
     if (!ip) return 1;
-    pr("Conectando a "); prip(ip); pr(":"); prd(port); pr(" ...\n");
+    pr("Conectando a "); prip(ip); pr(":"); prd(port); pr(use_tls ? " (TLS) ...\n" : " ...\n");
     if (tcp_connect(ip, port)) { pr("BN: no pude conectar (TCP)\n"); return 1; }
+
+    if (use_tls) {
+        tlsc.log = pr;
+        tls_seed(K->seed() ^ (K->ms() << 11) ^ ((u32)mac[5] << 3) ^ (u32)mac[4]);
+        if (tls_connect(&tlsc, 0, io_send, io_recv, host)) { pr("BN: fallo el handshake TLS\n"); tcp_close(); return 1; }
+        pr("TLS 1.3 listo (AES-128-GCM, X25519). OJO: el certificado aun no se verifica (parte 3c).\n");
+    }
 
     { const char *s = "GET "; while (*s) req[rl++] = *s++; }
     { const char *s = path; while (*s) req[rl++] = *s++; }
     { const char *s = " HTTP/1.1\r\nHost: "; while (*s) req[rl++] = *s++; }
     { const char *s = host; while (*s) req[rl++] = *s++; }
     { const char *s = "\r\nUser-Agent: BN/1\r\nConnection: close\r\n\r\n"; while (*s) req[rl++] = *s++; }
-    if (tcp_send((u8 *)req, rl)) { pr("BN: fallo al enviar\n"); tcp_close(); return 1; }
 
-    bodyn = tcp_recv(httpbuf, HTTPMAX - 1);
+    if (use_tls) {
+        if (tls_write(&tlsc, (u8 *)req, rl)) { pr("BN: fallo al enviar (TLS)\n"); tcp_close(); return 1; }
+        bodyn = 0;
+        for (;;) { int r = tls_read(&tlsc, httpbuf + bodyn, HTTPMAX - 1 - bodyn); if (r <= 0) break; bodyn += r; if (bodyn >= (int)HTTPMAX - 1) break; }
+    } else {
+        if (tcp_send((u8 *)req, rl)) { pr("BN: fallo al enviar\n"); tcp_close(); return 1; }
+        bodyn = tcp_recv(httpbuf, HTTPMAX - 1);
+    }
     tcp_close();
     httpbuf[bodyn] = 0;
     if (bodyn <= 0) { pr("BN: sin respuesta\n"); return 1; }
@@ -719,7 +778,8 @@ int mod_main(const struct kapi *k)
     while (*a == ' ') a++;
 
     if (nic_init()) return 1;
-    pr("BN: tarjeta e1000, MAC "); prmac(mac); pr("\n");
+    pr("BN: tarjeta e1000\n  MAC real:  "); prmac(real_mac);
+    pr("\n  MAC IMBOS: "); prmac(mac); pr("  (soy BOS)\n");
     if (ieq(a, "mac")) return 0;
 
     if (do_dhcp()) { K->ram(RAM_FREE, net_bank, 0, 0); return 1; }

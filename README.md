@@ -282,6 +282,7 @@ BN "mac"                                    enciende la tarjeta y muestra su MAC
 BN "ping 10.0.2.2"                          ping (ICMP)
 BN "dns ejemplo.com"                        resuelve el nombre a IP
 BN "get http://10.0.2.2:8080/hola.txt"      baja la página por HTTP y la muestra (hasta 4 KB en pantalla)
+BN "get https://10.0.2.2:8443/"             igual pero por HTTPS, con el TLS 1.3 propio (ver abajo)
 ```
 
 Probado en QEMU (`-nic user,model=e1000`): DHCP da 10.0.2.15, el ping responde 4/4, `dns example.com` devuelve su IP, y
@@ -295,8 +296,16 @@ Probado en QEMU (`-nic user,model=e1000`): DHCP da 10.0.2.15, el ping responde 4
   HKDF** (el *key schedule* de TLS 1.3), **AES-128 y AES-128-GCM** (la suite `TLS_AES_128_GCM_SHA256`) y **X25519** (el
   intercambio de claves). Cada uno probado contra sus vectores oficiales (FIPS-197, RFC 4231/5869/7748, NIST GCM) con
   `make bn-crypto-test`.
-- **3b:** el handshake TLS 1.3 (ClientHello/ServerHello, derivar las claves, descifrar los records) contra un servidor real.
+- **3b (hecho):** el handshake **TLS 1.3** completo (`tools/bn/tls.c`): ClientHello/ServerHello, X25519, derivar las claves
+  (key schedule con HKDF), descifrar y verificar el Finished del servidor, mandar el nuestro, y cifrar/descifrar los datos
+  de aplicación con AES-128-GCM. Probado en Linux contra un servidor TLS 1.3 real (`make bn-tls-test`) **y dentro de QEMU**:
+  `BN "get https://..."` hace el handshake y baja la página descifrada. Suite `TLS_AES_128_GCM_SHA256`, grupo X25519.
+  **Falta la 3c:** todavía NO se verifica el certificado del servidor, así que el canal va cifrado pero **no autenticado**
+  (vulnerable a un intermediario). Por eso BN avisa en pantalla y PKG/FORO siguen usando iPXE (`NET`) para el hub real.
 - **3c:** parsear el certificado X.509, verificar la firma (ECDSA P-256 / RSA-PSS) y la cadena hasta una raíz de confianza.
+
+**La MAC IMBOS (secretito):** BN no manda con la MAC de fábrica, sino con una firma propia "IMBOS" (*soy BOS*) mezclada
+(XOR) con la MAC real y forzada a ser unicast de administración local. `BN` muestra las dos (`MAC real` y `MAC IMBOS`).
 
 Mientras tanto iPXE (`NET`, abajo) se queda como la opción para **HTTPS**, así PKG, FORO y COSMOS siguen con Render y
 GitHub hasta que BN sepa cifrar. Todavía no hay Wi-Fi: BN es por cable / QEMU.

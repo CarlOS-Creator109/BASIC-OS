@@ -172,7 +172,8 @@ static void ghash(const u8 H[16], const u8 *aad, int al, const u8 *c, int cl, u8
     { u64 ab = (u64)al * 8, cb = (u64)cl * 8; u8 lb[16];
       for (i = 0; i < 8; i++) lb[i] = (u8)(ab >> (56 - 8*i));
       for (i = 0; i < 8; i++) lb[8+i] = (u8)(cb >> (56 - 8*i));
-      for (i = 0; i < 16; i++) y[i] ^= lb[i]; gf_mul(y, H); }
+      for (i = 0; i < 16; i++) y[i] ^= lb[i];
+      gf_mul(y, H); }
     xmemcpy(out, y, 16);
 }
 static void gctr(const aes128 *a, const u8 icb[16], const u8 *in, int n, u8 *out)
@@ -194,13 +195,14 @@ static void gcm_core(const u8 key[16], const u8 *iv, int ivl, const u8 *aad, int
     xmemset(H, 0, 16); aes128_encrypt(&a, H, H);
     if (ivl == 12) { xmemcpy(J0, iv, 12); J0[12]=0; J0[13]=0; J0[14]=0; J0[15]=1; }
     else { u8 z[16]; xmemset(z,0,16); ghash(H, 0, 0, iv, ivl, J0); (void)z; }
-    /* CTR empieza en J0+1 */
+    /* CTR empieza en J0+1. GHASH va siempre sobre el texto CIFRADO: al cifrar es la salida, al descifrar la entrada
+     * (lo calculamos antes de descifrar, por si in y out son el mismo buffer). */
     { u8 c0[16]; xmemcpy(c0, J0, 16); for (i=15;i>=12;i--){ if(++c0[i]) break; }
-      gctr(&a, c0, in, n, out); }
-    ghash(H, aad, al, enc ? out : cin, n, S);
+      if (enc) { gctr(&a, c0, in, n, out); ghash(H, aad, al, out, n, S); }
+      else     { ghash(H, aad, al, in, n, S); gctr(&a, c0, in, n, out); } }
+    (void)cin;
     gctr(&a, J0, S, 16, T);
-    if (enc) xmemcpy(tag, T, 16);
-    else xmemcpy((u8 *)tag, T, 16);   /* el llamante compara */
+    xmemcpy(tag, T, 16);
 }
 void aes128_gcm_encrypt(const u8 key[16], const u8 *iv, int ivl, const u8 *aad, int al,
                         const u8 *in, int n, u8 *out, u8 tag[16])
