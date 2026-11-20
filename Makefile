@@ -5,7 +5,8 @@
 #   make 64 / make 32 / make doom / make video   una sola version
 #   make bas2bin  tools/bas2bin/bas2bin: compila .BAS a .BIN de la tienda (tambien esta en PKG, tecla C)
 #   make super    super-basicos.img: 64 y 32 bits en un solo disco con menu, y una sola particion con
-#                 DOOM, el video (si existe), Linux y NET.BIN que ven los dos (ver tools/super/super.asm)
+#                 DOOM, el video (si existe), Linux y NET.BIN que ven los dos (ver tools/super/super.asm).
+#                 La particion es BFS; SUPER_FS=fat para la FAT16 de antes
 #   make run      la arranca en QEMU
 #   make test     prueba el interprete en el host (sin arrancar el SO)
 #   make clean
@@ -33,7 +34,7 @@ LIBO    := lib.o
 endif
 LDFLAGS := -m $(LDEMU) -z max-page-size=0x1000 -T linker.ld -nostdlib -z noexecstack --no-warn-rwx-segments
 
-OBJS := $(ENTRYO) kernel.o vga.o kbd.o $(LIBO) ram.o task.o irq.o bmg.o bfs.o sysinfo.o basic.o store.o pci.o mouse.o bios.o blk.o fs.o mmio.o usb.o \
+OBJS := $(ENTRYO) kernel.o vga.o kbd.o $(LIBO) ram.o task.o irq.o bmg.o bfs.o ext4.o sysinfo.o basic.o store.o pci.o mouse.o bios.o blk.o fs.o mmio.o usb.o \
         hda.o ac97.o audio.o atapi.o cd.o sys.o module.o fb.o
 
 # todas las versiones; la de video solo si hay un .BVC (make VIDEO=mi.bvc)
@@ -46,7 +47,7 @@ all: $(ALLIMGS) tools/bas2bin/bas2bin
 doom: pc-basic-doom.img
 video: pc-basic-video.img
 
-boot.bin: boot.asm
+boot.bin: boot.asm Makefile
 	nasm -f bin -DKERNEL_SECTORS=$(KSECT) $< -o $@
 
 stage2.bin: stage2.asm
@@ -65,12 +66,12 @@ entry32.o: entry32.asm thunk32.bin
 entry.o: entry.asm thunk.bin
 	nasm -f elf64 $< -o $@
 
-%.o: %.c kernel.h basic.h store.h fs.h kapi.h audio.h cd.h sys.h module.h bfs.h
+%.o: %.c kernel.h basic.h store.h fs.h kapi.h audio.h cd.h sys.h module.h bfs.h ext4.h
 	$(CC) $(CFLAGS) $(if $(filter $@,$(KOS)),$(KOSFLAGS)) -c $< -o $@
 
 # drivers y codigo que corre poco se compilan con -Os para que el kernel quepa en KSECT (los gcc nuevos, como el
 # de Arch, hacen el codigo mas grande con -O2). Lo que corre siempre (BASIC, VGA, audio, teclado, reloj) sigue en -O2.
-KOS      := bfs.o kernel.o sysinfo.o store.o pci.o mouse.o bios.o blk.o fs.o mmio.o usb.o hda.o ac97.o atapi.o cd.o sys.o module.o ram.o
+KOS      := bfs.o ext4.o kernel.o sysinfo.o store.o pci.o mouse.o bios.o blk.o fs.o mmio.o usb.o hda.o ac97.o atapi.o cd.o sys.o module.o ram.o
 KOSFLAGS := -Os
 
 kernel.elf: $(OBJS) linker.ld
@@ -292,21 +293,40 @@ store/COMETAS.BIN: tools/bmg/cometas.bas $(B2B)/bas2bin
 	$(B2B)/bas2bin -p $< $@
 juegos: store/COMETAS.BIN
 
-# ---- super-basicos.img: menu de arranque + PC BASIC 64 + PC BASIC 32 + una FAT16 compartida ----
+# ---- super-basicos.img: menu de arranque + PC BASIC 64 + PC BASIC 32 + una particion compartida (BFS o FAT16) ----
 SUPERDIR := tools/super
 $(SUPERDIR)/hook.bin: $(SUPERDIR)/hook.asm
 	nasm -f bin $< -o $@
 $(SUPERDIR)/super.bin: $(SUPERDIR)/super.asm $(SUPERDIR)/hook.bin
 	cd $(SUPERDIR) && nasm -f bin super.asm -o super.bin
-# la particion lleva todo: DOOM + WAD, el video si existe, NET.BIN si existe y Linux
-build-super/completo64.img: pc-basic.img DOOM.BIN COSMOS.BIN tools/mkbashimg $(WAD) $(wildcard $(VIDEO))
+# la particion lleva todo: DOOM + WAD, el video si existe, NET.BIN si existe y Linux.
+# SUPER_FS=bfs (por defecto): la particion es BFS (tipo 0xB0). SUPER_FS=fat: FAT16 como antes (Linux/BASHTERM la puede
+# montar en /mnt; con BFS, BASHTERM arranca igual pero no ve esos archivos).
+SUPER_FS ?= bfs
+SUPER_MB  = $$(( 64 + $(if $(wildcard $(VIDEO)),$$(stat -c %s $(VIDEO)) / 1048576,0) ))
+ifeq ($(SUPER_FS),bfs)
+build-super/completo64.img: pc-basic.img DOOM.BIN COSMOS.BIN tools/mkbfs $(WAD) $(wildcard $(VIDEO)) store/COMETAS.BIN Makefile
+	mkdir -p build-super
+	rm -f $@
+	tools/mkbfs nuevo $@ $(SUPER_MB) --arranque pc-basic.img --etiqueta BASIC-OS
+	for f in DOOM.BIN COSMOS.BIN $(WAD) tools/linux/BZIMAGE tools/linux/INITRD.GZ $(wildcard $(VIDEO)); do tools/mkbfs meter $@ $$f / > /dev/null; done
+	tools/mkbfs mv $@ /$(notdir $(WAD)) /$(shell echo $(notdir $(WAD)) | tr a-z A-Z)
+	$(if $(wildcard $(VIDEO)),tools/mkbfs mv $@ /$(notdir $(VIDEO)) /$(shell echo $(notdir $(VIDEO)) | tr a-z A-Z))
+	[ ! -f tools/net/NET.BIN ] || tools/mkbfs meter $@ tools/net/NET.BIN / > /dev/null
+	[ -z "$(HUB_URL)" ] || { { echo "$(HUB_URL)"; [ -z "$(HUB_KEY)" ] || echo "$(HUB_KEY)"; } > HUB.CFG; tools/mkbfs meter $@ HUB.CFG / > /dev/null; }
+	tools/mkbfs mkdir $@ /APPS && tools/mkbfs meter $@ store/COMETAS.BIN /APPS > /dev/null
+	tools/mkbfs mkdir $@ /VIDEOS
+	tools/mkbfs revisar $@
+else
+build-super/completo64.img: pc-basic.img DOOM.BIN COSMOS.BIN tools/mkbashimg $(WAD) $(wildcard $(VIDEO)) Makefile
 	mkdir -p build-super
 	tools/mkbashimg $@ pc-basic.img tools/linux/BZIMAGE tools/linux/INITRD.GZ \
 	  --copy DOOM.BIN=DOOM.BIN --copy COSMOS.BIN=COSMOS.BIN --copy $(WAD)=$(shell echo $(notdir $(WAD)) | tr a-z A-Z) \
 	  $(if $(wildcard $(VIDEO)),--copy $(VIDEO)=$(shell echo $(notdir $(VIDEO)) | tr a-z A-Z)) \
 	  $$( [ -f tools/net/NET.BIN ] && echo --copy tools/net/NET.BIN=NET.BIN ) \
 	  $$( [ -n "$(HUB_URL)" ] && { { echo "$(HUB_URL)"; [ -z "$(HUB_KEY)" ] || echo "$(HUB_KEY)"; } > HUB.CFG; echo --copy HUB.CFG=HUB.CFG; } ) \
-	  --mib $$(( 64 + $(if $(wildcard $(VIDEO)),$$(stat -c %s $(VIDEO)) / 1048576,0) ))
+	  --mib $(SUPER_MB)
+endif
 super-basicos.img: build-super/completo64.img pc-basic32.img $(SUPERDIR)/super.bin $(SUPERDIR)/mksuper.py
 	python3 $(SUPERDIR)/mksuper.py $@ $(SUPERDIR)/super.bin build-super/completo64.img pc-basic32.img
 	@$(if $(wildcard $(VIDEO)),,echo "(sin video: no existe $(VIDEO); usa make super VIDEO=archivo.bvc)")

@@ -3,7 +3,7 @@
 
 uso: mksuper.py salida.img super.bin completo64.img pc-basic32.img
 
-completo64.img es una imagen de mkbashimg (pc-basic.img + particion FAT16 en el LBA 4096) con
+completo64.img es una imagen de mkbfs o mkbashimg (pc-basic.img + particion BFS o FAT16 en el LBA 4096) con
 todo lo que se quiera compartir: DOOM.BIN, el WAD, el video, BZIMAGE, INITRD.GZ, NET.BIN...
 Esquema del disco resultante (mismos numeros que super.asm):
   LBA 0        MBR del menu, con la particion apuntando a la FAT compartida
@@ -41,7 +41,7 @@ def main():
     ptype = entry[4]
     pstart, psize = struct.unpack_from("<II", entry, 8)
     if mbr64[510:512] != b"\x55\xaa" or ptype == 0 or pstart != ZONE:
-        die(full64 + " no parece una imagen de mkbashimg (particion FAT en el LBA 4096)")
+        die(full64 + " no parece una imagen de mkbfs/mkbashimg (particion en el LBA 4096)")
     fsize = os.path.getsize(full64)
     if fsize < (pstart + psize) * SEC:
         die(full64 + " esta incompleta")
@@ -81,8 +81,9 @@ def main():
         z = bytearray(d32)
         z[446:510] = mbr64[446:510]
         o.seek(B32 * SEC); o.write(z)
-    print("super: %s  (%d MB; 64 bits en LBA %d, 32 bits en LBA %d, FAT %d MB en LBA %d)"
-          % (out, total * SEC >> 20, B64, B32, psize * SEC >> 20, PART))
+    kind = {0xB0: "BFS", 0x0B: "FAT32", 0x0C: "FAT32"}.get(ptype, "FAT16")
+    print("super: %s  (%d MB; 64 bits en LBA %d, 32 bits en LBA %d, %s %d MB en LBA %d)"
+          % (out, total * SEC >> 20, B64, B32, kind, psize * SEC >> 20, PART))
 
 
 main()

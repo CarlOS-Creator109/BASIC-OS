@@ -1624,11 +1624,13 @@ static void st_dir(void)
             fs_fail(r);
         else {
             unsigned long long fr, tot;
-            if (fs_space(spec, &fr, &tot) == 0) {   /* BFS: espacio libre */
+            if (fs_space(spec, &fr, &tot) == 0) {   /* BFS o FAT: espacio libre */
                 print_int((int)(fr >> 20));
                 puts_(" MB LIBRES DE ");
                 print_int((int)(tot >> 20));
-                puts_(" (BFS)\n");
+                puts_(" (");
+                puts_(fs_kind());
+                puts_(")\n");
             }
         }
         return;

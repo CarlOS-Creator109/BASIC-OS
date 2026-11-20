@@ -524,7 +524,8 @@ static int bfs_collect(void)
     return 1;
 }
 
-static int bfs_install(const char *tn, u32 tsect)
+/* instalar por el kernel (K->fsop): BFS (tipo 0xB0) o FAT32 (tipo 0x0C) */
+static int bfs_install(const char *tn, u32 tsect, u8 ptype, const char *fsname)
 {
     static u8 mbr[512];
     char spec[300];
@@ -539,15 +540,15 @@ static int bfs_install(const char *tn, u32 tsect)
     /* tabla de particiones (sin codigo de arranque todavia: el disco solo arranca si todo llega bien) */
     memset(mbr, 0, sizeof mbr);
     e = mbr + 0x1BE;
-    e[0] = 0x80; e[1] = 0xFE; e[2] = 0xFF; e[3] = 0xFF; e[4] = 0xB0; e[5] = 0xFE; e[6] = 0xFF; e[7] = 0xFF;
+    e[0] = 0x80; e[1] = 0xFE; e[2] = 0xFF; e[3] = 0xFF; e[4] = ptype; e[5] = 0xFE; e[6] = 0xFF; e[7] = 0xFF;
     *(u32 *)(e + 8) = PSTART; *(u32 *)(e + 12) = psect;
     mbr[510] = 0x55; mbr[511] = 0xAA;
     if (!wr_or_fail(tn, 0, 1, mbr, "la tabla de particiones"))
         return 0;
-    pr("\nDando formato BFS ");
+    pr("\nDando formato "); pr(fsname); pr(" ");
     mkspec(spec, sizeof spec, tn, "");
     spec[slen(spec) - 1] = 0;                       /* "HD1.1:" */
-    if ((r = K->fsop(FSOP_FORMAT, spec, "BASIC-OS", 0, 0))) { prnum((u32)-r); fail(" no pude dar formato BFS"); return 0; }
+    if ((r = K->fsop(FSOP_FORMAT, spec, "BASIC-OS", 0, 0))) { prnum((u32)-r); fail(" no pude dar formato"); return 0; }
     pr("\nCopiando "); prnum(files_n); pr(" archivos ");
     for (i = 0; i < (u32)nfl; i++) {
         struct fl *f = &P_LIST[i];
@@ -577,6 +578,9 @@ static int bfs_install(const char *tn, u32 tsect)
         return 0;
     return 1;
 }
+
+static u8 inst_ptype = 0xB0;
+static const char *inst_fs = "BFS";
 
 int mod_main(const struct kapi *k)
 {
@@ -618,12 +622,22 @@ int mod_main(const struct kapi *k)
     use_bfs = K->ver >= 9 && K->fsop;
     if (use_bfs) {
         pr("\nSistema de archivos:\n");
+        int f32 = K->ver >= 10;                     /* el kernel ya sabe escribir FAT32 */
         pr("1) BFS   el de BASIC-OS: usa todo el disco, nombres largos, no se rompe si se va la luz (recomendado)\n");
-        pr("2) FAT16 el de siempre: maximo 2 GB, nombres cortos; lo pueden leer Linux (BASHTERM) y otras PCs\n");
+        if (f32)
+            pr("2) FAT32 todo el disco (hasta 2 TB), nombres largos; lo leen Linux, Windows y otras PCs\n");
+        pr(f32 ? "3" : "2");
+        pr(") FAT16 el de siempre: maximo 2 GB, nombres cortos (el instalador viejo)\n");
         pr("Elige (Enter = 1): ");
         n = readline(line, sizeof line);
         if (n < 0) { pr("Cancelado.\n"); return 0; }
-        use_bfs = !(n > 0 && line[0] == '2');
+        if (n > 0 && line[0] == (f32 ? '3' : '2'))
+            use_bfs = 0;
+        else if (f32 && n > 0 && line[0] == '2') {
+            if (tsect - PSTART < 70000) { fail("el disco es muy chico para FAT32 (minimo ~35 MB): usa BFS o FAT16"); return 1; }
+            inst_ptype = 0x0C;
+            inst_fs = "FAT32";
+        }
     }
     if (!use_bfs && !geometry(tsect)) { fail("el disco destino es muy chico (minimo ~10 MB)"); return 1; }
 
@@ -635,18 +649,18 @@ int mod_main(const struct kapi *k)
         if (!bfs_collect()) { if (fl_bank) K->ram(RAM_FREE, fl_bank, 0, 0); return 1; }
         pr("Listo en RAM: "); prnum(head_n / 2); pr(" KB de sistema, ");
         prnum(files_n); pr(" archivos y "); prnum(dirs_n); pr(" carpetas ("); prnum((u32)(fl_bytes / 1024)); pr(" KB).\n");
-        pr("Se creara BFS de "); prmb(tsect - PSTART); pr(" en "); pr(tn); pr(".\n");
+        pr("Se creara "); pr(inst_fs); pr(" de "); prmb(tsect - PSTART); pr(" en "); pr(tn); pr(".\n");
         pr("\n!!! SE BORRARA TODO EL CONTENIDO DE "); pr(tn); pr(" !!!\nEscribe el nombre del disco para confirmar: ");
         n = readline(line, sizeof line);
         if (n <= 0 || !streq(line, tn)) { pr("Cancelado: no se escribio nada.\n"); return 0; }
         pr("\nNo apagues ni saques el disco.\n");
-        if (!bfs_install(tn, tsect)) {
+        if (!bfs_install(tn, tsect, inst_ptype, inst_fs)) {
             if (fl_bank) K->ram(RAM_FREE, fl_bank, 0, 0);
             pr("\nLa instalacion NO termino. El disco puede haber quedado inservible: reinstala.\n");
             return 1;
         }
         if (fl_bank) K->ram(RAM_FREE, fl_bank, 0, 0);
-        pr("\n\nInstalacion completa y verificada en "); pr(tn); pr(" (BFS).\nReinicia y arranca desde ese disco.\n");
+        pr("\n\nInstalacion completa y verificada en "); pr(tn); pr(" ("); pr(inst_fs); pr(").\nReinicia y arranca desde ese disco.\n");
         return 0;
     }
     have_fs = open_source_fs();

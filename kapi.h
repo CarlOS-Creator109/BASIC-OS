@@ -18,7 +18,7 @@
 #ifndef KAPI_H
 #define KAPI_H
 
-#define KAPI_VER 9
+#define KAPI_VER 10
 #define FONT_ADDR 0x6800            /* fuente 8x16: 16 bytes por caracter, 256 caracteres */
 
 /* tipos de SOUND (los usa tambien el kernel) */
@@ -47,7 +47,8 @@
 #define TASK_COUNT     7
 
 /* v9: K->fsop: escribir en discos BFS (el sistema de archivos de BASIC-OS). spec = "HD0.1:/CARPETA/ARCHIVO".
- * 0 = bien; < 0 = error (-7 el disco no es BFS / solo lectura, -8 sin espacio, -9 ya existe, -10 carpeta no vacia,
+ * v10: tambien FAT16 y FAT32 (con nombres largos); EXT4, CD y FAT12 son de solo lectura.
+ * 0 = bien; < 0 = error (-7 solo lectura, -8 sin espacio, -9 ya existe, -10 carpeta no vacia,
  * -11 nombre no valido, -2 no existe, -5 error del disco) */
 #define FSOP_WRITE     0    /* data[size] -> crea o reemplaza el archivo */
 #define FSOP_MKDIR     1
@@ -55,7 +56,8 @@
 #define FSOP_RENAME    3    /* spec2 = ruta nueva (mismo disco) */
 #define FSOP_SPACE     4    /* data = unsigned long long[2]: bytes libres y totales */
 #define FSOP_KIND      5    /* data = char[8]: "BFS", "FAT16"... del disco de spec */
-#define FSOP_FORMAT    6    /* spec = "HD1.1:" (su tipo en el MBR ya es 0xB0), data = etiqueta */
+#define FSOP_FORMAT    6    /* spec = "HD1.1:", data = etiqueta; segun el tipo en el MBR: 0xB0 BFS, 0x0B/0x0C FAT32,
+                               0x04/0x06/0x0E FAT16 (max 2 GB) */
 
 #define BTN_LEFT   1
 #define BTN_RIGHT  2
@@ -174,7 +176,7 @@ struct kapi {
     /* v8: tareas cooperativas (ver task.c). TASK_NEW fn, arg, nombre -> numero; TASK_YIELD; TASK_SLEEP arg = ms;
      * TASK_EXIT; TASK_KILL arg = numero; TASK_KILLRANGE fn = desde, arg = hasta; TASK_SELF; TASK_COUNT */
     long (*task)(int op, void (*fn)(void *), void *arg, const char *name);
-    /* v9: escribir en BFS (ver FSOP_*) */
+    /* v9: escribir en BFS; v10: tambien FAT16/32 (ver FSOP_*) */
     int (*fsop)(int op, const char *spec, const void *data, unsigned long long size, const char *spec2);
 };
 

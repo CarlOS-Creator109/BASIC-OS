@@ -6,7 +6,7 @@
 
 /* ---- escritor FAT16 minimo: guarda los programas en HDn.1:/APPS/ del disco de arranque (solo discos de la BIOS) ---- */
 static struct {
-    int ok, bfs; char dev[8]; u32 part, spc, res, nfat, rootent, fatsz, root_lba, data_lba, nclus, dlo, dhi, csize;
+    int ok, bfs; char dev[8], pn; u32 part, spc, res, nfat, rootent, fatsz, root_lba, data_lba, nclus, dlo, dhi, csize;
 } fw;
 
 /* ---- disco BFS (kapi v9): lo escribe el kernel con K->fsop ---- */
@@ -14,7 +14,7 @@ static void fw_bspec(char *o, const char *dir11, const char *name)
 {
     int j = 0, i;
     for (i = 0; fw.dev[i]; i++) o[j++] = fw.dev[i];
-    o[j++] = '.'; o[j++] = '1'; o[j++] = ':'; o[j++] = '/';
+    o[j++] = '.'; o[j++] = fw.pn; o[j++] = ':'; o[j++] = '/';
     for (i = 0; i < 8 && dir11[i] && dir11[i] != ' '; i++) o[j++] = dir11[i];
     if (name) {
         o[j++] = '/';
@@ -94,13 +94,17 @@ static void fw_init(void)
     fw.bfs = 0;
     if (K->blk(fw.dev, 0, 0, 1, s0) || s0[510] != 0x55 || s0[511] != 0xAA)
         return;
-    if (K->ver >= 9 && K->fsop)                     /* particion BFS: la escribe el kernel */
-        for (i = 0; i < 4; i++)
-            if (s0[0x1BE + 16 * i + 4] == 0xB0) {
+    fw.pn = '1';
+    if (K->ver >= 9 && K->fsop)                     /* BFS (y desde la v10 tambien FAT16/32): la escribe el kernel */
+        for (i = 0; i < 4; i++) {
+            u8 t = s0[0x1BE + 16 * i + 4];
+            if (t == 0xB0 || (K->ver >= 10 && (t == 0x0B || t == 0x0C || t == 4 || t == 6 || t == 0x0E))) {
                 fw.bfs = 1;
                 fw.ok = 1;
+                fw.pn = (char)('1' + i);
                 return;
             }
+        }
     for (i = 0; i < 4; i++) {
         const u8 *e = s0 + 0x1BE + 16 * i;
         if ((e[4] == 4 || e[4] == 6 || e[4] == 0x0E) && *(const u32 *)(e + 8)) { part = *(const u32 *)(e + 8); break; }

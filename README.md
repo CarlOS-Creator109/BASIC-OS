@@ -93,7 +93,8 @@ PKG, INSTALL) se compila para 32 bits.
 | `pci.c` | Enumeración PCI (puertos 0xCF8/0xCFC) para el comando `PCI` y los futuros drivers |
 | `store.c` / `thunk.asm` | Directorio y ranuras de SAVE/LOAD sobre sectores crudos; `thunk.asm` salta de modo largo a modo real para usar INT 13h |
 | `bios.c` / `blk.c` | INT 13h desde modo largo; lista de discos `FDn/HDn/CDn/USBn` (`DRIVES`) |
-| `fs.c` | Lectura de FAT12/16/32 e ISO9660 sobre cualquier disco |
+| `fs.c` | Discos: BFS (lee y escribe), FAT16/32 (lee y escribe, nombres largos), FAT12, EXT2/3/4 e ISO9660 (solo lectura) |
+| `ext4.c` | Lector de EXT2/3/4 (extents, bloques indirectos, carpetas htree) |
 | `usb.c` / `mmio.c` | Driver EHCI + almacenamiento masivo (BOT/SCSI); `map_mmio` mapea registros sin caché |
 | `hda.c` | Audio Intel HDA: CORB/RIRB, descubre la ruta pin→DAC y reproduce un tono por DMA |
 | `task.c` | Tareas (`K->task`, comando `TAREAS`): pila y registros por tarea, cambio en `kbd_poll()` o por el reloj (preempción) |
@@ -151,7 +152,8 @@ línea de comandos. Los programas pueden leer `MOUSEX`, `MOUSEY` (mismas coorden
 
 **Discos** (`DRIVES` los lista): disqueteras `FD0..`, discos ATA/SATA/IDE `HD0..` (por la BIOS, INT 13h con
 EDD), lectoras de CD y memorias USB `CD0..`/`USB0..` (driver propio EHCI + mass storage, solo lectura).
-Se leen FAT12/16/32 y ISO9660 (nombres 8.3, sin nombres largos):
+Se leen BFS, FAT12/16/32 (con nombres largos), EXT2/3/4 e ISO9660; se escriben BFS, FAT16 y FAT32 (ver
+[Sistemas de archivos](#sistemas-de-archivos-bfs-fat32-ext4)):
 `DIR "HD0:"`, `DIR "CD0:CARPETA"`, `TYPE "HD0:LEEME.TXT"`, `LOAD "HD1.2:PROG.BAS"` (`HDn.m` = partición m).
 Cualquier nombre con `:` va a esos discos; sin `:` sigue siendo SAVE/LOAD en el USB de arranque.
 USB: solo controladores EHCI (USB 2.0); dispositivos lentos/rápidos pasan al controlador compañero, que no
@@ -209,7 +211,7 @@ comparación (`= <> < > <= >=`) y `CHR$ STR$ LEFT$ RIGHT$ MID$(a$,i[,n]) INKEY$`
 
 - `POKE`/`PEEK` acceden a memoria física directa (hasta 1 GB): un `POKE` mal puesto puede colgar la máquina.
 - La memoria se reparte así: código del kernel desde 0x10000, bss y pila desde 0x100000, módulos de `/SYS` en 0x300000 (escritorio) y 0x380000 (apps).
-- Sin interrupciones (todo por sondeo). Los programas viven en RAM; SAVE/LOAD solo en el USB de arranque, el resto de discos es de solo lectura.
+- Los programas viven en RAM. `SAVE`/`LOAD` sin `:` van a las ranuras del disco de arranque; con `HDn.m:/ruta` se guardan en cualquier disco BFS, FAT16 o FAT32 que vea la BIOS (EXT4, CD y USB nativo son de solo lectura).
 - Aún no hay arreglos (`DIM`), `^` ni números de punto flotante.
 
 ## Entorno de ventanas (V1.2)
@@ -284,8 +286,9 @@ el sistema a la RAM y luego escribe.
 2. Elige el sistema de archivos:
    - **1) BFS** (Enter): el de BASIC-OS. Usa todo el disco (10 GB, 1 TB...), nombres largos con carpetas, y no se rompe si
      se va la luz a media escritura. Ver [BFS](#bfs-el-sistema-de-archivos-de-basic-os).
-   - **2) FAT16**: el de siempre. Máximo ~2 GB y nombres 8.3, pero lo pueden leer Linux (BASHTERM monta la partición FAT
-     en `/mnt`) y otras computadoras.
+   - **2) FAT32**: todo el disco (hasta 2 TB) con nombres largos; lo leen Linux (BASHTERM la monta en `/mnt`), Windows
+     y cualquier otra computadora. No tiene diario: si se va la luz a media escritura pueden quedar clusters perdidos.
+   - **3) FAT16**: el instalador viejo. Máximo ~2 GB y nombres 8.3.
 3. Escribe el nombre del disco para confirmar (`HD1`). Se copian el arranque, el kernel, /SYS y todos los archivos
    (DOOM, COSMOS, NET.BIN, Linux, HUB.CFG, tus programas de `APPS`, `VIDEOS`...), se releen y se comparan. El sector de
    arranque se escribe al final: el disco solo arranca si todo llegó bien.
@@ -293,7 +296,8 @@ el sistema a la RAM y luego escribe.
 Solo se escriben discos que ve la BIOS (un USB de arranque sí; el USB nativo (EHCI) y los CD no). Se instala la versión con
 la que arrancaste (desde la imagen super, la de 64 bits). Hace falta RAM para todo el sistema (QEMU: `-m 512`).
 Probado en QEMU: un disco de 10 GB con BFS (arranca, PKG baja programas a `APPS/`, se cortó la máquina a media copia y el
-disco quedó bien) y FAT16 en disco vacío y en el mismo disco. **Pruébalo primero en una memoria USB, no en el SSD con tu Linux.**
+disco quedó bien), FAT32 en un disco de 600 MB (arranca, guarda y `fsck.fat` lo da por bueno) y FAT16 en disco vacío y
+en el mismo disco. **Pruébalo primero en una memoria USB, no en el SSD con tu Linux.**
 
 > HTTPS con Render: Render manda la raiz "GTS Root R4" con firma cruzada de GlobalSign; iPXE solo reconoce raices por huella, asi que `tools/net/build.sh` aplica `x509-cross-signed-roots.patch` (acepta un certificado cuyo nombre y llave publica coinciden con una raiz de confianza). Probado en QEMU con una cadena igual a la de Render.
 
@@ -321,8 +325,9 @@ Desde BASIC (además de `DIR`, `TYPE`, `LOAD`, `PLAY`... que leen igual que en F
 | `MV "HD0.1:/A","HD0.1:/VIDEOS"` | renombra o mueve dentro del mismo disco (a una carpeta que existe: adentro) |
 | `SCRATCH "HD0.1:/A"` (o `RM`) | borra un archivo o una carpeta vacía |
 
-`DIR` de un disco BFS termina con los MB libres. Los programas usan `K->fsop` (kapi v9: escribir, carpeta, borrar, renombrar,
-espacio libre, dar formato); PKG, BCC y COSMOS guardan en `APPS/` y `VIDEOS/` igual en BFS que en FAT.
+`DIR` de un disco BFS o FAT termina con los MB libres y el tipo. Los programas usan `K->fsop` (kapi v9: escribir, carpeta,
+borrar, renombrar, espacio libre, dar formato; v10: también en FAT16/32); PKG, BCC y COSMOS guardan en `APPS/` y `VIDEOS/`
+igual en BFS que en FAT. Los mismos comandos funcionan en discos FAT16/32.
 
 Desde Linux (`tools/mkbfs`, lo compila `make`):
 
@@ -337,6 +342,28 @@ make bfs HUB_URL=https://... HUB_KEY=...                    # basic-os-bfs.img (
 
 Lo que todavía no se puede: Linux (BASHTERM) arranca desde un disco BFS pero no lo monta en `/mnt` (sigue buscando una
 partición FAT), y el escritorio aún no muestra nombres largos con acentos (la fuente es de 8 bits).
+
+## Sistemas de archivos: BFS, FAT32, EXT4
+BFS es el de siempre de BASIC-OS (INSTALL y `make super` lo usan por defecto), pero por si hace falta:
+
+| | leer | escribir | dar formato (INSTALL / `FSOP_FORMAT`) |
+|---|---|---|---|
+| **BFS** (tipo 0xB0) | sí | sí, con diario | sí |
+| **FAT32** (tipo 0x0B/0x0C) | sí, nombres largos | sí, nombres largos | sí |
+| **FAT16** (tipo 0x04/0x06/0x0E) | sí, nombres largos | sí, nombres largos | sí (máx. 2 GB) |
+| **FAT12** (disquetes) | sí | no | no |
+| **EXT2/3/4** (tipo 0x83) | sí: extents, bloques indirectos, carpetas htree, bloques de 1-4 KB | **no** | no |
+| **ISO9660** (CD) | sí | no | no |
+
+- **FAT:** al escribir se crean nombres largos (VFAT) con su nombre corto `NOMBRE~1.EXT`; los datos van primero, luego la FAT
+  (todas sus copias) y al final la entrada de la carpeta. Se mantiene el FSInfo de FAT32. Las carpetas crecen solas; la raíz
+  de FAT16 tiene 512 entradas fijas (cada nombre largo usa 2-3) y al llenarse da `?DISK FULL`. Probado contra `fsck.fat`:
+  cientos de archivos con nombres largos, borrar, sobrescribir, mover carpetas, llenar la raíz.
+- **EXT4 es de solo lectura** y así se queda: escribir ext4 bien (grupos, bitmaps, extents, htree, journal jbd2, sumas
+  crc32c de metadatos) es un proyecto casi del tamaño de BFS, y un error rompería el Linux de alguien. Sirve para sacar
+  archivos de una partición de Linux: `DIR "HD1.2:/home"`, `CP "HD1.2:/home/carlos/video.bvc","HD0.1:/VIDEOS/VIDEO.BVC"`.
+  No lee discos con `inline_data`, `meta_bg`, cifrado o `casefold` (dice `?BAD FORMAT`).
+- `make super SUPER_FS=fat` arma la partición compartida en FAT16 como antes (para que BASHTERM la vea en `/mnt`).
 
 ## Atajos para gente de UNIX/Linux
 `LS` = `DIR`, `CAT`/`MORE`/`LESS` = `TYPE`, `RM` = `SCRATCH`, `CLEAR` = `CLS`, `MAN` = `HELP`, `LSBLK`/`DF` = `DRIVES`,
@@ -542,7 +569,9 @@ directo (sin ensamblador ni enlazador) y trae su propia biblioteca de C, así qu
 - **Dentro de BASIC-OS:** `store/BCC.BIN` (paquete de la tienda). Se corre desde PKG, pide el archivo (`HD0.1:/SRC/HOLA.C`), lo compila
   (unos 50 ms en QEMU) y guarda `HD0.1:/APPS/HOLA.BIN`; luego sale en la lista de PKG con su número. Los `#include "x.h"` se buscan en
   la misma carpeta del `.c`. Necesita ~180 MB de RAM (como PKG). Todavía no hay un editor de texto en el sistema: el `.c` se copia a la
-  partición desde Linux con mtools: en `super-basicos.img` la FAT empieza en el byte 6291456
+  partición desde Linux: `super-basicos.img` ahora es BFS (`tools/mkbfs mkdir super-basicos.img /SRC` y
+  `tools/mkbfs meter super-basicos.img hola.c /SRC`; encuentra la partición solo); con `make super SUPER_FS=fat` es FAT y se
+  usa mtools: la FAT empieza en el byte 6291456
   (`mmd -i super-basicos.img@@6291456 ::/SRC` la primera vez y `mcopy -i super-basicos.img@@6291456 hola.c ::/SRC/HOLA.C`); en
   `pc-basic-doom.img` y `completo64.img` empieza en 2097152.
 - **En Linux:** `make bcc` hace `tools/bcc/bcc` y `tools/bcc/bccrun`. `tools/bcc/bcc hola.c -o HOLA.BIN` da el mismo `.BIN`, y
