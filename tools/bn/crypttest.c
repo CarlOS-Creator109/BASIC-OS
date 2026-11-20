@@ -92,6 +92,30 @@ int main(void)
         check("secreto", sa, "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742", 32);
     }
 
+    printf("SHA-512 / SHA-384 (FIPS):\n");
+    {
+        u8 o64[64];
+        sha512((const u8 *)"abc", 3, o64);
+        check("sha512 abc", o64, "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f", 64);
+        sha384((const u8 *)"abc", 3, o64);
+        check("sha384 abc", o64, "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7", 48);
+    }
+
+    printf("ECDSA P-256 (RFC 6979, msg \"sample\"):\n");
+    {
+        u8 pub[64], r[32], s[32], z[32];
+        unhex("60fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6", pub, 32);
+        unhex("7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299", pub + 32, 32);
+        unhex("efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716", r, 32);
+        unhex("f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8", s, 32);
+        sha256((const u8 *)"sample", 6, z);
+        printf("  %s  firma valida\n", ecdsa_p256_verify(pub, z, 32, r, s) ? "ok   " : "FALLO");
+        if (!ecdsa_p256_verify(pub, z, 32, r, s)) fails++;
+        r[31] ^= 1;
+        printf("  %s  rechaza firma alterada\n", ecdsa_p256_verify(pub, z, 32, r, s) ? "FALLO" : "ok   ");
+        if (ecdsa_p256_verify(pub, z, 32, r, s)) fails++;
+    }
+
     printf(fails ? "\n%d PRUEBAS FALLARON\n" : "\nTODO BIEN\n", fails);
     return fails ? 1 : 0;
 }

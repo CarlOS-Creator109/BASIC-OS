@@ -30,7 +30,17 @@ typedef struct {
     u8 rbuf[20000]; int rlen, rpos;        /* buffer de lectura del stream TCP */
     u8 hs[32768]; int hslen, hspos;        /* mensajes de handshake re-ensamblados */
     u8 app_in[20000]; int app_inlen, app_inpos;   /* datos de aplicacion descifrados pendientes */
+
+    /* verificación del certificado (3c) */
+    const u8 *roots; int roots_len;        /* raíces de confianza (certs DER concatenados), 0 si no hay */
+    u8 certmsg[16384]; int certmsg_len;    /* mensaje Certificate (contenido) */
+    u8 cverify[1024]; int cverify_len;     /* mensaje CertificateVerify (contenido) */
+    u8 th_cert[32];                        /* hash del transcript hasta Certificate (para CertificateVerify) */
+    int verified;                          /* 1 = cadena + firma + host verificados contra una raíz */
 } tls_conn;
+
+/* raíces de confianza: certs DER concatenados. Llamar antes de tls_connect. */
+void tls_trust(tls_conn *c, const u8 *roots_der, int len);
 
 /* hace el handshake completo. 0 = canal listo; <0 = error */
 void tls_seed(u32 s);   /* siembra el generador de la clave efimera (hazlo antes de tls_connect) */

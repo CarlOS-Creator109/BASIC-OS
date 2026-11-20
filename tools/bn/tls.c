@@ -1,6 +1,9 @@
 /* tls.c - cliente TLS 1.3 (RFC 8446) para BN. Suite TLS_AES_128_GCM_SHA256, grupo X25519.
- * Parte 3b: handshake + datos de aplicacion. No verifica el certificado todavia (3c). */
+ * Handshake + datos de aplicacion (3b) + verificación del certificado: cadena, firma y host (3c). */
 #include "tls.h"
+#include "x509.h"
+
+void tls_trust(tls_conn *c, const u8 *roots_der, int len) { c->roots = roots_der; c->roots_len = len; }
 
 static void xcpy(void *d, const void *s, int n) { u8 *a = d; const u8 *b = s; while (n-- > 0) *a++ = *b++; }
 static void log_(tls_conn *c, const char *s) { if (c->log) c->log(s); }
@@ -137,7 +140,7 @@ static int send_client_hello(tls_conn *c)
     b[i++]=0x00;b[i++]=0x0a; b[i++]=0x00;b[i++]=0x04; b[i++]=0x00;b[i++]=0x02; b[i++]=0x00;b[i++]=0x1d;
     /* signature_algorithms (para que el server mande certificado) */
     b[i++]=0x00;b[i++]=0x0d; b[i++]=0x00;b[i++]=0x0a; b[i++]=0x00;b[i++]=0x08;
-    b[i++]=0x04;b[i++]=0x03; b[i++]=0x08;b[i++]=0x04; b[i++]=0x08;b[i++]=0x07; b[i++]=0x04;b[i++]=0x01;   /* ecdsa_p256, rsa_pss_sha256, ed25519, rsa_pkcs1_sha256 */
+    b[i++]=0x04;b[i++]=0x03; b[i++]=0x08;b[i++]=0x04; b[i++]=0x08;b[i++]=0x05; b[i++]=0x04;b[i++]=0x01;   /* ecdsa_p256_sha256, rsa_pss_sha256, rsa_pss_sha384, rsa_pkcs1_sha256 */
     /* key_share: x25519 + nuestra clave publica */
     x25519_base(c->pub, c->priv);
     b[i++]=0x00;b[i++]=0x33; b[i++]=0x00;b[i++]=0x26; b[i++]=0x00;b[i++]=0x24;
@@ -243,12 +246,92 @@ static int next_hs_msg(tls_conn *c, u8 **msg, int *len)
     }
 }
 
+/* ---- verificación del certificado (3c) ---- */
+static int der_rs(const u8 *sig, int sl, u8 r[32], u8 s[32])
+{
+    int rl, sll, i, p = 0;
+    if (sl < 8 || sig[0] != 0x30) return -1;
+    p = 2; if (sig[1] & 0x80) p = 2 + (sig[1] & 0x7F);
+    if (sig[p] != 0x02) return -1; rl = sig[p + 1]; const u8 *rp = sig + p + 2;
+    p = p + 2 + rl; if (sig[p] != 0x02) return -1; sll = sig[p + 1]; const u8 *sp = sig + p + 2;
+    while (rl > 32 && *rp == 0) { rp++; rl--; } while (sll > 32 && *sp == 0) { sp++; sll--; }
+    if (rl > 32 || sll > 32) return -1;
+    for (i = 0; i < 32; i++) r[i] = s[i] = 0;
+    for (i = 0; i < rl; i++) r[32 - rl + i] = rp[i];
+    for (i = 0; i < sll; i++) s[32 - sll + i] = sp[i];
+    return 0;
+}
+static int verify_with(const cert *k, int scheme, const u8 *sig, int sl, const u8 *hash, int hl)
+{
+    if (scheme == 0x0403) { u8 r[32], s[32]; if (k->key_rsa || der_rs(sig, sl, r, s)) return 0; return ecdsa_p256_verify(k->ec, hash, hl, r, s); }
+    if (scheme == 0x0804 || scheme == 0x0805) { if (!k->key_rsa) return 0; return rsa_pss_verify(k->n, k->nlen, k->e, k->elen, sig, sl, hash, hl); }
+    if (scheme == 0x0401) { if (!k->key_rsa) return 0; return rsa_pkcs1_verify(k->n, k->nlen, k->e, k->elen, sig, sl, hash, hl); }
+    return 0;
+}
+/* ¿los certs del chain[m-1] encadenan a una raíz de confianza? */
+static int anchored(tls_conn *c, const cert *top)
+{
+    const u8 *p = c->roots; int left = c->roots_len;
+    while (left > 4 && p[0] == 0x30) {
+        int l = p[1] & 0x80 ? 0 : p[1], used;
+        if (p[1] & 0x80) { int nb = p[1] & 0x7F, i; l = 0; for (i = 0; i < nb; i++) l = l << 8 | p[2 + i]; used = 2 + nb + l; }
+        else used = 2 + l;
+        if (used > left) break;
+        { cert R; if (x509_parse(p, used, &R) == 0) {
+            if (top->issuer_len == R.subject_len && !diff(top->issuer, R.subject, R.subject_len) && x509_check_sig(top, &R)) return 1;
+        } }
+        p += used; left -= used;
+    }
+    return 0;
+}
+static int tls_verify(tls_conn *c)
+{
+    cert chain[5]; int m = 0; const u8 *p = c->certmsg; int left = c->certmsg_len;
+    if (left < 4) { log_(c, "TLS: sin certificado\n"); return 1; }
+    { int ctx = p[0]; p += 1 + ctx; left -= 1 + ctx; }       /* certificate_request_context */
+    { int ll = p[0] << 16 | p[1] << 8 | p[2]; p += 3; left = ll < left - 0 ? ll : left; }   /* CertificateList length */
+    while (left > 3 && m < 5) {
+        int clen = p[0] << 16 | p[1] << 8 | p[2]; p += 3; left -= 3;
+        if (clen > left) break;
+        if (x509_parse(p, clen, &chain[m])) { log_(c, "TLS: certificado ilegible\n"); return 1; }
+        m++; p += clen; left -= clen;
+        if (left >= 2) { int el = p[0] << 8 | p[1]; p += 2 + el; left -= 2 + el; }   /* extensiones por cert */
+    }
+    if (!m) return 1;
+
+    /* 1) CertificateVerify: firma del servidor con la clave de la hoja, sobre el transcript */
+    {
+        int scheme = c->cverify[0] << 8 | c->cverify[1];
+        int slen = c->cverify[2] << 8 | c->cverify[3];
+        const u8 *sig = c->cverify + 4;
+        int hl = (scheme == 0x0805) ? 48 : 32;
+        u8 buf[64 + 33 + 1 + 32], h[48]; int i, n = 0;
+        if (slen + 4 > c->cverify_len) return 1;
+        for (i = 0; i < 64; i++) buf[n++] = 0x20;
+        { const char *s = "TLS 1.3, server CertificateVerify"; while (*s) buf[n++] = (u8)*s++; }
+        buf[n++] = 0;
+        for (i = 0; i < 32; i++) buf[n++] = c->th_cert[i];
+        hash_by_len(hl, buf, n, h);
+        if (!verify_with(&chain[0], scheme, sig, slen, h, hl)) { log_(c, "TLS: la firma del handshake (CertificateVerify) no cuadra\n"); return 1; }
+    }
+    /* 2) cadena: cada cert firmado por el siguiente */
+    { int i; for (i = 0; i + 1 < m; i++) if (!x509_check_sig(&chain[i], &chain[i + 1])) { log_(c, "TLS: la cadena de certificados no cuadra\n"); return 1; } }
+    /* 3) raíz de confianza */
+    if (c->roots) { if (!anchored(c, &chain[m - 1])) { log_(c, "TLS: el certificado no encadena a una raíz de confianza\n"); return 1; } }
+    /* 4) nombre del host */
+    if (!x509_match_host(&chain[0], c->host)) { log_(c, "TLS: el certificado no es para este host\n"); return 1; }
+
+    c->verified = c->roots ? 1 : 0;
+    return 0;
+}
+
 int tls_connect(tls_conn *c, void *io, tls_send_fn snd, tls_recv_fn rcv, const char *host)
 {
     u8 srv_pub[32], shared[32], th[32], fk[32], mac[32], *msg; int type, mlen;
     c->io = io; c->snd = snd; c->rcv = rcv; c->host = host;
     c->rlen = c->rpos = c->hslen = c->hspos = c->app = 0;
     c->app_inlen = c->app_inpos = 0;
+    c->certmsg_len = c->cverify_len = 0; c->verified = 0;
     sha256_init(&c->th);
     rng(c->priv, 32);
 
@@ -270,9 +353,18 @@ int tls_connect(tls_conn *c, void *io, tls_send_fn snd, tls_recv_fn rcv, const c
             sha256_update(&c->th, msg, mlen);        /* ahora si, al transcript */
             break;
         }
-        /* EncryptedExtensions(8), Certificate(11), CertificateVerify(15): en 3b solo al transcript (no se verifica) */
+        if (type == 11) {                            /* Certificate: lo guardamos para verificar */
+            int n = mlen - 4 > (int)sizeof c->certmsg ? (int)sizeof c->certmsg : mlen - 4;
+            xcpy(c->certmsg, msg + 4, n); c->certmsg_len = n;
+        } else if (type == 15) {                     /* CertificateVerify: firma del servidor sobre el transcript */
+            transcript(c, c->th_cert);               /* el hash incluye hasta Certificate */
+            { int n = mlen - 4 > (int)sizeof c->cverify ? (int)sizeof c->cverify : mlen - 4; xcpy(c->cverify, msg + 4, n); c->cverify_len = n; }
+        }
         sha256_update(&c->th, msg, mlen);
     }
+
+    /* verificar el certificado: firma del handshake (CertificateVerify), cadena hasta una raíz y nombre del host */
+    if (tls_verify(c)) { log_(c, "TLS: el certificado no es de fiar\n"); if (c->roots) return -2; }
 
     /* claves de aplicacion (con el transcript hasta el Finished del servidor) */
     derive_app(c);

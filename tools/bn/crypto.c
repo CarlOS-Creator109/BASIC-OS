@@ -272,3 +272,284 @@ void x25519(u8 out[32], const u8 scalar[32], const u8 point[32])
     pack25519(out, a);
 }
 void x25519_base(u8 out[32], const u8 scalar[32]) { u8 nine[32] = {9}; x25519(out, scalar, nine); }
+
+/* ================================================================= SHA-384/512 ============ */
+static const u64 K512[80] = {
+0x428a2f98d728ae22ULL,0x7137449123ef65cdULL,0xb5c0fbcfec4d3b2fULL,0xe9b5dba58189dbbcULL,
+0x3956c25bf348b538ULL,0x59f111f1b605d019ULL,0x923f82a4af194f9bULL,0xab1c5ed5da6d8118ULL,
+0xd807aa98a3030242ULL,0x12835b0145706fbeULL,0x243185be4ee4b28cULL,0x550c7dc3d5ffb4e2ULL,
+0x72be5d74f27b896fULL,0x80deb1fe3b1696b1ULL,0x9bdc06a725c71235ULL,0xc19bf174cf692694ULL,
+0xe49b69c19ef14ad2ULL,0xefbe4786384f25e3ULL,0x0fc19dc68b8cd5b5ULL,0x240ca1cc77ac9c65ULL,
+0x2de92c6f592b0275ULL,0x4a7484aa6ea6e483ULL,0x5cb0a9dcbd41fbd4ULL,0x76f988da831153b5ULL,
+0x983e5152ee66dfabULL,0xa831c66d2db43210ULL,0xb00327c898fb213fULL,0xbf597fc7beef0ee4ULL,
+0xc6e00bf33da88fc2ULL,0xd5a79147930aa725ULL,0x06ca6351e003826fULL,0x142929670a0e6e70ULL,
+0x27b70a8546d22ffcULL,0x2e1b21385c26c926ULL,0x4d2c6dfc5ac42aedULL,0x53380d139d95b3dfULL,
+0x650a73548baf63deULL,0x766a0abb3c77b2a8ULL,0x81c2c92e47edaee6ULL,0x92722c851482353bULL,
+0xa2bfe8a14cf10364ULL,0xa81a664bbc423001ULL,0xc24b8b70d0f89791ULL,0xc76c51a30654be30ULL,
+0xd192e819d6ef5218ULL,0xd69906245565a910ULL,0xf40e35855771202aULL,0x106aa07032bbd1b8ULL,
+0x19a4c116b8d2d0c8ULL,0x1e376c085141ab53ULL,0x2748774cdf8eeb99ULL,0x34b0bcb5e19b48a8ULL,
+0x391c0cb3c5c95a63ULL,0x4ed8aa4ae3418acbULL,0x5b9cca4f7763e373ULL,0x682e6ff3d6b2b8a3ULL,
+0x748f82ee5defb2fcULL,0x78a5636f43172f60ULL,0x84c87814a1f0ab72ULL,0x8cc702081a6439ecULL,
+0x90befffa23631e28ULL,0xa4506cebde82bde9ULL,0xbef9a3f7b2c67915ULL,0xc67178f2e372532bULL,
+0xca273eceea26619cULL,0xd186b8c721c0c207ULL,0xeada7dd6cde0eb1eULL,0xf57d4f7fee6ed178ULL,
+0x06f067aa72176fbaULL,0x0a637dc5a2c898a6ULL,0x113f9804bef90daeULL,0x1b710b35131c471bULL,
+0x28db77f523047d84ULL,0x32caab7b40c72493ULL,0x3c9ebe0a15c9bebcULL,0x431d67c49c100d4cULL,
+0x4cc5d4becb3e42b6ULL,0x597f299cfc657e2aULL,0x5fcb6fab3ad6faecULL,0x6c44198c4a475817ULL };
+#define RR64(x,n) (((x) >> (n)) | ((x) << (64 - (n))))
+static void sha512_block(sha512_ctx *c, const u8 *p)
+{
+    u64 w[80], A,B,C,D,E,F,G,H,s0,s1,t1,t2,ch,maj; int i;
+    for (i = 0; i < 16; i++) { w[i] = 0; int k; for (k = 0; k < 8; k++) w[i] = w[i] << 8 | p[8*i+k]; }
+    for (i = 16; i < 80; i++) {
+        s0 = RR64(w[i-15],1) ^ RR64(w[i-15],8) ^ (w[i-15] >> 7);
+        s1 = RR64(w[i-2],19) ^ RR64(w[i-2],61) ^ (w[i-2] >> 6);
+        w[i] = w[i-16] + s0 + w[i-7] + s1;
+    }
+    A=c->h[0];B=c->h[1];C=c->h[2];D=c->h[3];E=c->h[4];F=c->h[5];G=c->h[6];H=c->h[7];
+    for (i = 0; i < 80; i++) {
+        s1 = RR64(E,14)^RR64(E,18)^RR64(E,41); ch=(E&F)^(~E&G);
+        t1 = H+s1+ch+K512[i]+w[i];
+        s0 = RR64(A,28)^RR64(A,34)^RR64(A,39); maj=(A&B)^(A&C)^(B&C);
+        t2 = s0+maj;
+        H=G;G=F;F=E;E=D+t1;D=C;C=B;B=A;A=t1+t2;
+    }
+    c->h[0]+=A;c->h[1]+=B;c->h[2]+=C;c->h[3]+=D;c->h[4]+=E;c->h[5]+=F;c->h[6]+=G;c->h[7]+=H;
+}
+static void sha512_run(sha512_ctx *c, const u8 *p, u64 n, u8 *out, int outlen)
+{
+    u64 bits; int i; u8 pad = 0x80;
+    c->len = 0; c->n = 0;
+    while (n) { int take = 128 - c->n; if ((u64)take > n) take = (int)n; { int k; for (k=0;k<take;k++) c->buf[c->n+k]=p[k]; } c->n+=take; c->len+=take; p+=take; n-=take; if (c->n==128){ sha512_block(c,c->buf); c->n=0; } }
+    bits = c->len * 8;
+    c->buf[c->n++] = pad;
+    if (c->n > 112) { while (c->n < 128) c->buf[c->n++]=0; sha512_block(c,c->buf); c->n=0; }
+    while (c->n < 112) c->buf[c->n++]=0;
+    for (i = 0; i < 8; i++) c->buf[c->n++]=0;              /* parte alta de la longitud (0) */
+    for (i = 0; i < 8; i++) c->buf[c->n++]=(u8)(bits >> (56 - 8*i));
+    sha512_block(c, c->buf);
+    for (i = 0; i < outlen; i++) out[i] = (u8)(c->h[i/8] >> (56 - 8*(i%8)));
+}
+void sha512(const u8 *p, u64 n, u8 out[64])
+{
+    sha512_ctx c;
+    c.h[0]=0x6a09e667f3bcc908ULL;c.h[1]=0xbb67ae8584caa73bULL;c.h[2]=0x3c6ef372fe94f82bULL;c.h[3]=0xa54ff53a5f1d36f1ULL;
+    c.h[4]=0x510e527fade682d1ULL;c.h[5]=0x9b05688c2b3e6c1fULL;c.h[6]=0x1f83d9abfb41bd6bULL;c.h[7]=0x5be0cd19137e2179ULL;
+    sha512_run(&c, p, n, out, 64);
+}
+void sha384(const u8 *p, u64 n, u8 out[48])
+{
+    sha512_ctx c;
+    c.h[0]=0xcbbb9d5dc1059ed8ULL;c.h[1]=0x629a292a367cd507ULL;c.h[2]=0x9159015a3070dd17ULL;c.h[3]=0x152fecd8f70e5939ULL;
+    c.h[4]=0x67332667ffc00b31ULL;c.h[5]=0x8eb44a8768581511ULL;c.h[6]=0xdb0c2e0d64f98fa7ULL;c.h[7]=0x47b5481dbefa4fa4ULL;
+    sha512_run(&c, p, n, out, 48);
+}
+
+/* ================================================================= bignum 256 + P-256 ============ */
+/* enteros de 256 bits en 4 limbs de 64 (poco significativo primero) */
+typedef struct { u64 v[4]; } bn;
+static const bn P256P = { { 0xFFFFFFFFFFFFFFFFULL, 0x00000000FFFFFFFFULL, 0x0000000000000000ULL, 0xFFFFFFFF00000001ULL } };
+static const bn P256N = { { 0xF3B9CAC2FC632551ULL, 0xBCE6FAADA7179E84ULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFF00000000ULL } };
+static const bn P256GX = { { 0xF4A13945D898C296ULL, 0x77037D812DEB33A0ULL, 0xF8BCE6E563A440F2ULL, 0x6B17D1F2E12C4247ULL } };
+static const bn P256GY = { { 0xCBB6406837BF51F5ULL, 0x2BCE33576B315eceULL, 0x8EE7EB4A7C0F9E16ULL, 0x4FE342E2FE1A7F9BULL } };
+
+static int bn_iszero(const bn *a) { return !(a->v[0]|a->v[1]|a->v[2]|a->v[3]); }
+static int bn_cmp(const bn *a, const bn *b) { int i; for (i=3;i>=0;i--){ if(a->v[i]<b->v[i])return -1; if(a->v[i]>b->v[i])return 1; } return 0; }
+static int bn_add(bn *r, const bn *a, const bn *b) { unsigned __int128 c=0; int i; for(i=0;i<4;i++){ c += (unsigned __int128)a->v[i]+b->v[i]; r->v[i]=(u64)c; c>>=64; } return (int)c; }
+static int bn_sub(bn *r, const bn *a, const bn *b) { unsigned __int128 br=0; int i; for(i=0;i<4;i++){ unsigned __int128 t=(unsigned __int128)a->v[i]-b->v[i]-br; r->v[i]=(u64)t; br=(t>>64)&1; } return (int)br; }
+static void bn_set(bn *r, const bn *a) { r->v[0]=a->v[0];r->v[1]=a->v[1];r->v[2]=a->v[2];r->v[3]=a->v[3]; }
+static void bn_zero(bn *r) { r->v[0]=r->v[1]=r->v[2]=r->v[3]=0; }
+static int bn_bit(const bn *a, int i) { return (int)((a->v[i>>6] >> (i&63)) & 1); }
+/* r = a mod m  (a tiene 512 bits en lo[4]+hi[4]); division larga bit a bit */
+static void bn_addmod(bn *r, const bn *a, const bn *b, const bn *m) { bn t; int c = bn_add(&t,a,b); if (c || bn_cmp(&t,m)>=0) bn_sub(&t,&t,m); bn_set(r,&t); }
+static void bn_submod(bn *r, const bn *a, const bn *b, const bn *m) { bn t; int br = bn_sub(&t,a,b); if (br) bn_add(&t,&t,m); bn_set(r,&t); }
+/* multiplicacion 256x256 -> 512, luego reduccion mod m por resta desplazada */
+static void bn_mulmod(bn *r, const bn *a, const bn *b, const bn *m)
+{
+    u64 prod[8]; int i,j; for(i=0;i<8;i++) prod[i]=0;
+    for (i=0;i<4;i++){ unsigned __int128 c=0; for(j=0;j<4;j++){ unsigned __int128 t=(unsigned __int128)a->v[i]*b->v[j]+prod[i+j]+c; prod[i+j]=(u64)t; c=t>>64; } prod[i+4]+=(u64)c; }
+    /* reducir: res de 512 bits mod m (256), bit a bit desde el mas alto */
+    { bn res; bn_zero(&res); int k;
+      for (k=511;k>=0;k--){
+          /* res = res*2 + bit k de prod */
+          u64 carry = (res.v[3]>>63)&1;
+          res.v[3]=(res.v[3]<<1)|(res.v[2]>>63); res.v[2]=(res.v[2]<<1)|(res.v[1]>>63); res.v[1]=(res.v[1]<<1)|(res.v[0]>>63); res.v[0]=(res.v[0]<<1)|((prod[k>>6]>>(k&63))&1);
+          if (carry || bn_cmp(&res,m)>=0) bn_sub(&res,&res,m);
+      }
+      bn_set(r,&res);
+    }
+}
+static void bn_modexp(bn *r, const bn *base, const bn *exp, const bn *m) { bn res, b; bn_zero(&res); res.v[0]=1; bn_set(&b,base); int i; for(i=0;i<256;i++){ if(bn_bit(exp,i)) bn_mulmod(&res,&res,&b,m); bn_mulmod(&b,&b,&b,m); } bn_set(r,&res); }
+static void bn_inv(bn *r, const bn *a, const bn *m) { bn e, two; bn_zero(&two); two.v[0]=2; bn_sub(&e,m,&two); bn_modexp(r,a,&e,m); }   /* a^(m-2) */
+
+/* punto en afin; inf=1 => infinito */
+typedef struct { bn x, y; int inf; } pt;
+static void pt_dbl(pt *r, const pt *p)
+{
+    if (p->inf || bn_iszero(&p->y)) { r->inf = 1; return; }
+    bn l, t, t2, three, x3, y3;
+    /* lambda = (3x^2 - 3) / (2y)   (a = -3) */
+    bn_mulmod(&t, &p->x, &p->x, &P256P);            /* x^2 */
+    bn_zero(&three); three.v[0]=3; bn_mulmod(&t, &t, &three, &P256P);   /* 3x^2 */
+    bn sub3; bn_zero(&sub3); sub3.v[0]=3; bn_submod(&t, &t, &sub3, &P256P);   /* 3x^2 - 3 */
+    bn_addmod(&t2, &p->y, &p->y, &P256P);           /* 2y */
+    bn_inv(&t2, &t2, &P256P);
+    bn_mulmod(&l, &t, &t2, &P256P);
+    bn_mulmod(&x3, &l, &l, &P256P);                 /* l^2 */
+    bn_submod(&x3, &x3, &p->x, &P256P); bn_submod(&x3, &x3, &p->x, &P256P);   /* - 2x */
+    bn_submod(&y3, &p->x, &x3, &P256P); bn_mulmod(&y3, &l, &y3, &P256P); bn_submod(&y3, &y3, &p->y, &P256P);
+    bn_set(&r->x,&x3); bn_set(&r->y,&y3); r->inf=0;
+}
+static void pt_add(pt *r, const pt *p, const pt *q)
+{
+    if (p->inf) { *r = *q; return; }
+    if (q->inf) { *r = *p; return; }
+    if (bn_cmp(&p->x,&q->x)==0) { if (bn_cmp(&p->y,&q->y)==0) { pt_dbl(r,p); return; } r->inf=1; return; }
+    bn l, dx, dy, x3, y3;
+    bn_submod(&dy, &q->y, &p->y, &P256P);
+    bn_submod(&dx, &q->x, &p->x, &P256P);
+    bn_inv(&dx, &dx, &P256P);
+    bn_mulmod(&l, &dy, &dx, &P256P);
+    bn_mulmod(&x3, &l, &l, &P256P); bn_submod(&x3,&x3,&p->x,&P256P); bn_submod(&x3,&x3,&q->x,&P256P);
+    bn_submod(&y3, &p->x, &x3, &P256P); bn_mulmod(&y3,&l,&y3,&P256P); bn_submod(&y3,&y3,&p->y,&P256P);
+    bn_set(&r->x,&x3); bn_set(&r->y,&y3); r->inf=0;
+}
+static void pt_mul(pt *r, const bn *k, const pt *p)
+{
+    pt acc; acc.inf = 1; int i;
+    for (i = 255; i >= 0; i--) { pt t; pt_dbl(&t, &acc); acc = t; if (bn_bit(k,i)) { pt_add(&t, &acc, p); acc = t; } }
+    *r = acc;
+}
+static void bn_frombe(bn *r, const u8 *p) { int i; for (i=0;i<4;i++){ u64 w=0,k; for(k=0;k<8;k++) w=w<<8|p[i*8+k]; r->v[3-i]=w; } }
+
+int ecdsa_p256_verify(const u8 pub[64], const u8 *hash, int hlen, const u8 r[32], const u8 s[32])
+{
+    bn rr, ss, z, w, u1, u2; pt Q, R, G, A, B;
+    bn_frombe(&rr, r); bn_frombe(&ss, s);
+    if (bn_iszero(&rr) || bn_iszero(&ss) || bn_cmp(&rr,&P256N)>=0 || bn_cmp(&ss,&P256N)>=0) return 0;
+    /* z = los hlen*8 bits mas a la izquierda del hash; para P-256 usamos 32 bytes */
+    { u8 zb[32]; int i; int n = hlen < 32 ? hlen : 32; for (i=0;i<32;i++) zb[i]=0; for (i=0;i<n;i++) zb[i]=hash[i]; bn_frombe(&z, zb); if (hlen > 32) { /* truncar a 256 bits ya hecho */ } }
+    bn_set(&G.x,&P256GX); bn_set(&G.y,&P256GY); G.inf=0;
+    bn_frombe(&Q.x, pub); bn_frombe(&Q.y, pub+32); Q.inf=0;
+    bn_inv(&w, &ss, &P256N);
+    bn_mulmod(&u1, &z, &w, &P256N);
+    bn_mulmod(&u2, &rr, &w, &P256N);
+    pt_mul(&A, &u1, &G);
+    pt_mul(&B, &u2, &Q);
+    pt_add(&R, &A, &B);
+    if (R.inf) return 0;
+    /* R.x mod n == r ? */
+    { bn xn; bn_set(&xn,&R.x); if (bn_cmp(&xn,&P256N)>=0) bn_sub(&xn,&xn,&P256N); return bn_cmp(&xn,&rr)==0 ? 1 : 0; }
+}
+
+/* ================================================================= RSA (verificar firma) ============ */
+/* enteros grandes para RSA: limbs de 32 bits, poco significativo primero. Hasta 4096 bits. */
+#define RL 132
+static void big_frombe(u32 *r, int L, const u8 *b, int blen)
+{
+    int i; for (i = 0; i < L; i++) r[i] = 0;
+    for (i = 0; i < blen; i++) { int bit = (blen - 1 - i) * 8; r[bit >> 5] |= (u32)b[i] << (bit & 31); }
+}
+static void big_tobe(const u32 *a, u8 *b, int blen)
+{
+    int i; for (i = 0; i < blen; i++) { int bit = (blen - 1 - i) * 8; b[i] = (u8)(a[bit >> 5] >> (bit & 31)); }
+}
+static int big_cmp(const u32 *a, const u32 *b, int L) { int i; for (i = L - 1; i >= 0; i--) { if (a[i] < b[i]) return -1; if (a[i] > b[i]) return 1; } return 0; }
+static void big_sub(u32 *a, const u32 *b, int L) { u64 br = 0; int i; for (i = 0; i < L; i++) { u64 t = (u64)a[i] - b[i] - br; a[i] = (u32)t; br = (t >> 32) & 1; } }
+/* r = a*b mod m, todo de L limbs. Reduccion bit a bit. */
+static void big_mulmod(u32 *r, const u32 *a, const u32 *b, const u32 *m, int L)
+{
+    static u32 prod[2 * RL]; u32 rem[RL + 1]; int i, k;
+    for (i = 0; i < 2 * L; i++) prod[i] = 0;
+    for (i = 0; i < L; i++) { u64 c = 0; for (k = 0; k < L; k++) { u64 t = (u64)a[i] * b[k] + prod[i + k] + c; prod[i + k] = (u32)t; c = t >> 32; } prod[i + L] += (u32)c; }
+    for (i = 0; i <= L; i++) rem[i] = 0;
+    for (k = 2 * L * 32 - 1; k >= 0; k--) {
+        int carry = (rem[L - 1] >> 31) & 1;                 /* el bit que se sale de L limbs */
+        for (i = L; i > 0; i--) rem[i] = (rem[i] << 1) | (rem[i - 1] >> 31);
+        rem[0] = (rem[0] << 1) | ((prod[k >> 5] >> (k & 31)) & 1);
+        (void)carry;
+        if (rem[L] || big_cmp(rem, m, L) >= 0) { big_sub(rem, m, L); rem[L] = 0; }
+    }
+    for (i = 0; i < L; i++) r[i] = rem[i];
+}
+/* out = in^e mod n (todo big-endian). k = tamano del modulo en bytes. Devuelve k o -1. */
+static int rsa_pub(u8 *out, const u8 *n, int nlen, const u8 *e, int elen, const u8 *in, int inlen)
+{
+    u32 N[RL], B[RL], R[RL], T[RL]; int L = (nlen + 3) / 4, i, bit, started = 0;
+    if (L > RL || inlen > nlen) return -1;
+    big_frombe(N, L, n, nlen); big_frombe(B, L, in, inlen);
+    if (big_cmp(B, N, L) >= 0) return -1;
+    for (i = 0; i < L; i++) R[i] = 0; R[0] = 1;
+    for (i = elen * 8 - 1; i >= 0; i--) {
+        bit = (e[elen - 1 - (i >> 3)] >> (i & 7)) & 1;
+        if (!started) { if (!bit) continue; started = 1; }
+        big_mulmod(T, R, R, N, L); for (int j = 0; j < L; j++) R[j] = T[j];     /* cuadrado */
+        if (bit) { big_mulmod(T, R, B, N, L); for (int j = 0; j < L; j++) R[j] = T[j]; }
+    }
+    big_tobe(R, out, nlen);
+    return nlen;
+}
+
+void hash_by_len(int hl, const u8 *d, int dl, u8 *out)
+{
+    if (hl == 48) sha384(d, dl, out);
+    else if (hl == 64) sha512(d, dl, out);
+    else sha256(d, dl, out);
+}
+/* MGF1 con la funcion hash del largo hl */
+static void mgf1(const u8 *seed, int sl, u8 *mask, int mlen, int hl)
+{
+    u8 cnt[4], h[64], buf[256 + 4]; int i, done = 0; u32 c = 0;
+    while (done < mlen) {
+        cnt[0]=(u8)(c>>24);cnt[1]=(u8)(c>>16);cnt[2]=(u8)(c>>8);cnt[3]=(u8)c;
+        for (i = 0; i < sl; i++) buf[i] = seed[i]; buf[sl]=cnt[0];buf[sl+1]=cnt[1];buf[sl+2]=cnt[2];buf[sl+3]=cnt[3];
+        hash_by_len(hl, buf, sl + 4, h);
+        for (i = 0; i < hl && done < mlen; i++) mask[done++] ^= h[i];
+        c++;
+    }
+}
+/* PKCS#1 v1.5: verifica que sig^e == 00 01 FF..FF 00 DigestInfo||hash */
+int rsa_pkcs1_verify(const u8 *n, int nlen, const u8 *e, int elen, const u8 *sig, int siglen, const u8 *hash, int hashlen)
+{
+    static const u8 oid256[] = {0x30,0x31,0x30,0x0d,0x06,0x09,0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x02,0x01,0x05,0x00,0x04,0x20};
+    static const u8 oid384[] = {0x30,0x41,0x30,0x0d,0x06,0x09,0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x02,0x02,0x05,0x00,0x04,0x30};
+    static const u8 oid512[] = {0x30,0x51,0x30,0x0d,0x06,0x09,0x60,0x86,0x48,0x01,0x65,0x03,0x04,0x02,0x03,0x05,0x00,0x04,0x40};
+    u8 em[512]; const u8 *oid = hashlen==48?oid384:(hashlen==64?oid512:oid256); int ol = 19, i, p;
+    if (nlen > 512 || siglen != nlen) return 0;
+    if (rsa_pub(em, n, nlen, e, elen, sig, siglen) < 0) return 0;
+    if (em[0] != 0x00 || em[1] != 0x01) return 0;
+    for (i = 2; i < nlen && em[i] == 0xFF; i++) ;
+    if (i < 10 || em[i] != 0x00) return 0;
+    p = i + 1;
+    if (p + ol + hashlen != nlen) return 0;
+    for (i = 0; i < ol; i++) if (em[p + i] != oid[i]) return 0;
+    for (i = 0; i < hashlen; i++) if (em[p + ol + i] != hash[i]) return 0;
+    return 1;
+}
+/* RSA-PSS (MGF1 con el mismo hash, salt = hashlen): verifica la firma del mensaje cuyo hash es mhash */
+int rsa_pss_verify(const u8 *n, int nlen, const u8 *e, int elen, const u8 *sig, int siglen, const u8 *mhash, int hashlen)
+{
+    u8 em[512], db[512], hp[64], mp[8 + 64 + 64], hh[64]; int i, emlen = nlen, dblen, slen = hashlen;
+    int embits = nlen * 8 - 1;                     /* para RSA el modulo es multiplo de 8, emBits = 8k-1 */
+    if (nlen > 512 || siglen != nlen) return 0;
+    if (rsa_pub(em, n, nlen, e, elen, sig, siglen) < 0) return 0;
+    if (em[emlen - 1] != 0xbc) return 0;
+    dblen = emlen - hashlen - 1;
+    for (i = 0; i < dblen; i++) db[i] = em[i];
+    { const u8 *H = em + dblen; u8 mask[512];
+      for (i = 0; i < dblen; i++) mask[i] = 0;
+      mgf1(H, hashlen, mask, dblen, hashlen);
+      for (i = 0; i < dblen; i++) db[i] ^= mask[i];
+      db[0] &= (u8)(0xFF >> (8 * emlen - embits));
+      /* db = PS(00..) || 0x01 || salt */
+      for (i = 0; i < dblen - slen - 1; i++) if (db[i] != 0) return 0;
+      if (db[dblen - slen - 1] != 0x01) return 0;
+      /* M' = 00000000 00000000 || mHash || salt ; H' = Hash(M') */
+      for (i = 0; i < 8; i++) mp[i] = 0;
+      for (i = 0; i < hashlen; i++) mp[8 + i] = mhash[i];
+      for (i = 0; i < slen; i++) mp[8 + hashlen + i] = db[dblen - slen + i];
+      hash_by_len(hashlen, mp, 8 + hashlen + slen, hh);
+      for (i = 0; i < hashlen; i++) if (hh[i] != H[i]) return 0;
+    }
+    (void)hp;
+    return 1;
+}

@@ -785,60 +785,6 @@ static int do_get(const char *url)
     return 0;
 }
 
-/* ================================================================= BNM (BOS Net Manager) ============
- * La red pasa por aquí: primero intenta con BN; si BN no da servicio (sin tarjeta, sin DHCP, o no pudo con la
- * petición), pasa a iPXE (NET.BIN) de reserva; si tampoco, da "SIN CONEXION - Cable o Red?". */
-#define MBOX_ADDR  0xB100000u
-#define LIST_ADDR  0xB000000u
-#define MBOX_MAGIC 0x48545342u                      /* 'BSTH' (el mismo buzón que usa PKG) */
-struct mbox { u32 magic, app_len, list_len, spare; };
-
-/* reserva: pide a iPXE (NET.APP) que baje la URL y la deja en LIST_ADDR. 0 = lo logró (y lo muestra). */
-static int ipxe_fetch(const char *url)
-{
-    struct mbox *m = (struct mbox *)(unsigned long)MBOX_ADDR;
-    char *args = (char *)K->args; int i = 0, j;
-    const char *pre = "dhcp;imgfetch -n bnm ", *post = ";bosstash bnm list";
-    m->magic = 0; m->list_len = 0;
-    for (j = 0; pre[j] && i < 158; j++) args[i++] = pre[j];
-    for (j = 0; url[j] && i < 158; j++) args[i++] = url[j];
-    for (j = 0; post[j] && i < 158; j++) args[i++] = post[j];
-    args[i] = 0;
-    if (K->exec("NET.APP") < 0) return 1;            /* no está NET.APP/NET.BIN */
-    if (m->magic != MBOX_MAGIC || m->list_len == 0) return 1;
-    { const char *p = (const char *)(unsigned long)LIST_ADDR; u32 n = m->list_len, k, lim = n > 4096 ? 4096 : n;
-      pr("--- iPXE ---\n");
-      for (k = 0; k < lim; k++) { char c[2] = { p[k], 0 }; pr(c); }
-      if (n > lim) pr("\n[...]\n");
-      pr("\n("); prd(n); pr(" bytes)\n");
-    }
-    return 0;
-}
-
-static int bnm(const char *cmd)
-{
-    char url[256]; int i; const char *u = cmd;
-    if (istarts(u, "get")) { u += 3; while (*u == ' ') u++; }
-    if (!*u) { pr("BNM: falta la URL\n"); return 1; }
-    for (i = 0; u[i] && i < 255; i++) url[i] = u[i];   /* copia: K->args se reescribe en el fallback */
-    url[i] = 0;
-
-    pr("BNM (BOS Net Manager): probando BN ...\n");
-    if (nic_init() == 0) {
-        pr("  BN: tarjeta e1000, MAC IMBOS "); prmac(mac); pr("\n");
-        if (do_dhcp() == 0) {
-            pr("  DHCP: "); prip(my_ip); pr("\n");
-            if (do_get(url) == 0) { K->ram(RAM_FREE, net_bank, 0, 0); pr("[BNM: servido por BN]\n"); return 0; }
-            pr("BNM: BN no pudo con esta petición; paso a iPXE (reserva) ...\n");
-        } else pr("BNM: BN sin servicio (sin DHCP / sin enlace); paso a iPXE (reserva) ...\n");
-        K->ram(RAM_FREE, net_bank, 0, 0);
-    } else pr("BNM: no hay tarjeta e1000 para BN; paso a iPXE (reserva) ...\n");
-
-    if (ipxe_fetch(url) == 0) { pr("[BNM: servido por iPXE (reserva)]\n"); return 0; }
-    pr("\nSIN CONEXION - Cable o Red?\n");
-    return 1;
-}
-
 /* ================================================================= entrada ============ */
 int mod_main(const struct kapi *k)
 {
@@ -846,8 +792,6 @@ int mod_main(const struct kapi *k)
     K = k;
     a = K->args ? K->args : "";
     while (*a == ' ') a++;
-
-    if (istarts(a, "@bnm")) { a += 4; while (*a == ' ') a++; return bnm(a); }
 
     if (nic_init()) return 1;
     pr("BN: tarjeta e1000\n  MAC real:  "); prmac(real_mac);

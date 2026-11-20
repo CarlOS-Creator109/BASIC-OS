@@ -53,3 +53,9 @@ tools/bcc/*.elf
 tools/mkbfs
 tools/bfstest
 basic-os-bfs.img
+
+# BN: raices de confianza (generadas con 'make roots') y binarios de prueba
+ROOTS.DER
+tools/bn/crypttest
+tools/bn/tlstest
+tools/bn/x509test
