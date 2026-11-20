@@ -18,12 +18,10 @@ EXTS = (".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v")
 LIMIT = 32 * 1024 * 1024
 # si el .BVC no cabe, se intenta con esto (en orden)
 SMALLER = [[], ["-f", "15"], ["-w", "192", "-h", "144", "-f", "15"], ["-w", "160", "-h", "120", "-f", "12"],
-           ["-w", "160", "-h", "120", "-f", "12", "-g"]]
-
-
-CYR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
-               ["a", "b", "v", "g", "d", "e", "yo", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s", "t", "u", "f",
-                "kh", "ts", "ch", "sh", "shch", "", "y", "'", "e", "yu", "ya"]))
+           ["-w", "160", "-h", "120", "-f", "12", "-r", "8000"],                  # audio a 8 kHz
+           ["-w", "160", "-h", "120", "-f", "12", "-r", "8000", "-t", "24"],      # menos pixeles actualizados por cuadro
+           ["-w", "160", "-h", "120", "-f", "10", "-r", "8000", "-t", "24"],
+           ["-w", "128", "-h", "96", "-f", "10", "-r", "8000", "-t", "24"]]
 
 
 def latin(text):
@@ -77,7 +75,7 @@ def make_bvc(mkbvc, src, dst, opts):
             return None
         print("videos:   %.1f MB no cabe en 32 MB, otra vez mas chico..." % (os.path.getsize(tmp) / 1048576), flush=True)
         os.unlink(tmp)
-    return "ni en gris y chiquito cabe en 32 MB (es muy largo)"
+    return "ni a 128x96 y 10 cuadros cabe en 32 MB (es muy largo)"
 
 
 def make_mp4(src, dst):
