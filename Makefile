@@ -265,15 +265,22 @@ $(SUPERDIR)/hook.bin: $(SUPERDIR)/hook.asm
 	nasm -f bin $< -o $@
 $(SUPERDIR)/super.bin: $(SUPERDIR)/super.asm $(SUPERDIR)/hook.bin
 	cd $(SUPERDIR) && nasm -f bin super.asm -o super.bin
-# la particion lleva todo: DOOM + WAD, el video si existe, NET.BIN si existe y Linux
-build-super/completo64.img: pc-basic.img DOOM.BIN COSMOS.BIN tools/mkbashimg $(WAD) $(wildcard $(VIDEO))
+# la particion lleva todo: DOOM + WAD, el video si existe, NET.BIN si existe y Linux.
+# VIDEOS = carpeta de videos (por defecto ../video-prueba): cada uno va tal cual (para MPLAY) y convertido a .BVC
+# (para PLAY) con un nombre corto; VIDEOS.TXT dice cual es cual. BVCOPTS = opciones de mkbvc (ej. "-w 320 -h 240").
+# Los .BVC se guardan en build-super/videos y solo se reconvierten si el video cambia.
+VIDEOS  ?= ../video-prueba
+BVCOPTS ?=
+build-super/completo64.img: pc-basic.img DOOM.BIN COSMOS.BIN tools/mkbashimg tools/mkbvc tools/videos.py $(WAD) $(wildcard $(VIDEO))
 	mkdir -p build-super
+	python3 tools/videos.py "$(VIDEOS)" build-super/videos $(BVCOPTS)
 	tools/mkbashimg $@ pc-basic.img tools/linux/BZIMAGE tools/linux/INITRD.GZ \
 	  --copy DOOM.BIN=DOOM.BIN --copy COSMOS.BIN=COSMOS.BIN --copy $(WAD)=$(shell echo $(notdir $(WAD)) | tr a-z A-Z) \
 	  $(if $(wildcard $(VIDEO)),--copy $(VIDEO)=$(shell echo $(notdir $(VIDEO)) | tr a-z A-Z)) \
 	  $$( [ -f tools/net/NET.BIN ] && echo --copy tools/net/NET.BIN=NET.BIN ) \
 	  $$( [ -n "$(HUB_URL)" ] && { { echo "$(HUB_URL)"; [ -z "$(HUB_KEY)" ] || echo "$(HUB_KEY)"; } > HUB.CFG; echo --copy HUB.CFG=HUB.CFG; } ) \
-	  --mib $$(( 64 + $(if $(wildcard $(VIDEO)),$$(stat -c %s $(VIDEO)) / 1048576,0) ))
+	  $$(cat build-super/videos/copy.args) \
+	  --mib $$(( 64 + $$(cat build-super/videos/mib) + $(if $(wildcard $(VIDEO)),$$(stat -c %s $(VIDEO)) / 1048576,0) ))
 super-basicos.img: build-super/completo64.img pc-basic32.img $(SUPERDIR)/super.bin $(SUPERDIR)/mksuper.py
 	python3 $(SUPERDIR)/mksuper.py $@ $(SUPERDIR)/super.bin build-super/completo64.img pc-basic32.img
 	@$(if $(wildcard $(VIDEO)),,echo "(sin video: no existe $(VIDEO); usa make super VIDEO=archivo.bvc)")
