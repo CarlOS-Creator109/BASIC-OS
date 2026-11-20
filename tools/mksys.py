@@ -6,32 +6,42 @@ uso: mksys.py imagen.img NOMBRE=ruta [NOMBRE=ruta ...]
 import struct, sys
 
 DIR_LBA, DIR_SECT, DATA_LBA, END_LBA = 232, 4, 236, 512
+# segunda zona: el final del disquete, despues de las 28 ranuras de SAVE (520 + 28*80 = 2760) y hasta 2880.
+# Las entradas de /SYS guardan el LBA de cada archivo, asi que el kernel los lee igual en cualquiera de las dos.
+EXTRA_LBA, EXTRA_END = 2760, 2880
 
 def main():
     img = sys.argv[1]
     items = [a.split("=", 1) for a in sys.argv[2:]]
     if len(items) > (DIR_SECT * 512 - 16) // 32:
         sys.exit("mksys: demasiados archivos")
-    data = bytearray()
+    zones = [[DATA_LBA, END_LBA, bytearray()], [EXTRA_LBA, EXTRA_END, bytearray()]]
     ents = bytearray()
-    lba = DATA_LBA
     for name, path in items:
         raw = open(path, "rb").read()
         nb = name.upper().encode()
         if len(nb) > 19:
             sys.exit("mksys: nombre muy largo: " + name)
         sects = (len(raw) + 511) // 512
+        for z in zones:                      # el primero en el que quepa
+            if z[0] + len(z[2]) // 512 + sects <= z[1]:
+                lba = z[0] + len(z[2]) // 512
+                z[2] += raw.ljust(sects * 512, b"\0")
+                break
+        else:
+            used = sum(len(z[2]) // 512 for z in zones)
+            sys.exit("mksys: /SYS no cabe (%d sectores de %d)" % (used + sects, sum(z[1] - z[0] for z in zones)))
         ents += nb.ljust(20, b"\0") + struct.pack("<III", lba, len(raw), 0)
-        data += raw.ljust(sects * 512, b"\0")
-        lba += sects
-    if lba > END_LBA:
-        sys.exit("mksys: /SYS no cabe (%d sectores de %d)" % (lba - DATA_LBA, END_LBA - DATA_LBA))
     d = (b"PCBSYS1\0" + struct.pack("<I", len(items)) + b"\0\0\0\0" + bytes(ents))
     d = d.ljust(DIR_SECT * 512, b"\0")
     with open(img, "r+b") as f:
         f.seek(DIR_LBA * 512)
         f.write(d)
-        f.write(data)
-    print("/SYS: %d archivos, %d de %d sectores" % (len(items), lba - DATA_LBA, END_LBA - DATA_LBA))
+        for z in zones:
+            if z[2]:
+                f.seek(z[0] * 512)
+                f.write(z[2])
+    print("/SYS: %d archivos, %d + %d de %d + %d sectores" % (len(items), len(zones[0][2]) // 512, len(zones[1][2]) // 512,
+                                                              END_LBA - DATA_LBA, EXTRA_END - EXTRA_LBA))
 
 main()
