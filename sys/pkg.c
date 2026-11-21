@@ -38,10 +38,13 @@ unsigned long strlen(const char *s);
 #define LIST_MAX   0x100000u
 #define MBOX_ADDR  0xB100000u
 #define NEED_RAM   0xB300000u           /* hay que tener RAM hasta aqui: ~179 MB (usa -m 256 en QEMU) */
-#define FW_FAT     0xB200000u           /* escritor FAT16: FAT (128 KB), raiz (16 KB), cluster/directorio (64 KB), relectura (64 KB) */
-#define FW_ROOT    0xB220000u
-#define FW_BUF     0xB230000u
-#define FW_SCR     0xB240000u
+/* Memoria PRIVADA de PKG (escritor FAT + tablas): un banco de 32 MB que pedimos al asignador del
+ * sistema (K->ram) en vez de hardcodear direcciones. g_priv es su base; todo lo privado son offsets. */
+static unsigned long g_priv;
+#define FW_FAT     (g_priv + 0x00000u)  /* escritor FAT16: FAT (128 KB), raiz (16 KB), cluster/directorio (64 KB), relectura (64 KB) */
+#define FW_ROOT    (g_priv + 0x20000u)
+#define FW_BUF     (g_priv + 0x30000u)
+#define FW_SCR     (g_priv + 0x40000u)
 #define MBOX_MAGIC 0x48545342u          /* 'BSTH' */
 
 struct mbox { u32 magic, app_len, list_len, spare; };
@@ -252,8 +255,8 @@ static int build_cmd(char *dst, int max, const char *a, const char *b, const cha
 #define MAXAPPS 400
 struct app { char name[16]; u32 size; char sha[65]; char desc[56]; u8 hub, inst; };
 struct dfile { char name[16]; u32 size; };
-#define APPS_ADDR  0xB260000u           /* tabla de programas: 400 x 144 B. Fuera del modulo (solo hay 64 KB entre PKG.APP e INSTALL.APP) */
-#define DISK_ADDR  0xB270000u           /* archivos que ya estan en el disco: 400 x 20 B */
+#define APPS_ADDR  (g_priv + 0x60000u)  /* tabla de programas: 400 x 144 B, en el banco privado */
+#define DISK_ADDR  (g_priv + 0x70000u)  /* archivos que ya estan en el disco: 400 x 20 B */
 #define apps ((struct app *)(unsigned long)APPS_ADDR)
 static int napps;
 static int truncated;                   /* el hub tiene mas de MAXAPPS programas */
@@ -858,6 +861,13 @@ int mod_main(const struct kapi *k)
                "Cierrala primero (o sal del escritorio) y vuelve a abrir PKG.\n");
             return 1;
         } }
+    /* memoria privada de PKG: un banco del asignador del sistema (no una direccion fija) */
+    if (K->ver >= 7 && K->ram) {
+        g_priv = (unsigned long)K->ram(RAM_ALLOC, 0, 1, "PKG");
+        if (!g_priv) { pr("PKG: no hay un banco de RAM libre para la tienda.\n"); return 1; }
+    } else {
+        g_priv = 0xB200000u;                        /* kernel viejo sin K->ram: la zona fija de siempre */
+    }
     load_cfg();
     if (!hub[0]) {
         pr("\nNo hay HUB.CFG en el disco: escribe la direccion de tu hub.\n");
@@ -948,8 +958,11 @@ int mod_main(const struct kapi *k)
             pr("Ese programa solo existe en el disco, o no hay conexion con el hub.\n");
         if (bas_loaded)
             break;
-        if (win_opened)
+        if (win_opened) {
+            if (K->ver >= 7 && K->ram) K->ram(RAM_FREE, g_priv, 0, 0);
             return MOD_WINAPP;
+        }
     }
+    if (K->ver >= 7 && K->ram) K->ram(RAM_FREE, g_priv, 0, 0);
     return 0;
 }

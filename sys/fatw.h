@@ -32,10 +32,11 @@ static int fw_bfs_save(const char *dir11, const char *name, const u8 *data, u32 
     r = K->fsop(FSOP_WRITE, sp, data, size, 0);
     return r == 0 ? 0 : (r == -8 ? 4 : (r == -11 ? 1 : 3));
 }
-static u16 *const FATP = (u16 *)(unsigned long)FW_FAT;
-static u8 *const FROOT = (u8 *)(unsigned long)FW_ROOT;
-static u8 *const FBUF = (u8 *)(unsigned long)FW_BUF;
-static u8 *const FSCR = (u8 *)(unsigned long)FW_SCR;
+/* se asignan en fw_init() porque FW_* puede ser una zona dada por el asignador en runtime */
+static u16 *FATP;
+static u8 *FROOT;
+static u8 *FBUF;
+static u8 *FSCR;
 
 static int fw_wr(u32 lba, u32 n, const u8 *src)           /* escribe y relee: 0 = bien */
 {
@@ -77,6 +78,10 @@ static void fw_init(void)
     int i, nd = 0;
     u32 total, rootsec, nclus, part = 0, ndev;
     char name[8];
+    FATP  = (u16 *)(unsigned long)FW_FAT;           /* las zonas del escritor, ya con el banco privado listo */
+    FROOT = (u8 *)(unsigned long)FW_ROOT;
+    FBUF  = (u8 *)(unsigned long)FW_BUF;
+    FSCR  = (u8 *)(unsigned long)FW_SCR;
     fw.ok = 0;
     for (ndev = 0; ndev < 16; ndev++) {
         char line[64];
