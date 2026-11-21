@@ -314,6 +314,26 @@ Probado en QEMU (`-nic user,model=e1000`): DHCP da 10.0.2.15, el ping responde 4
     verificado contra la raíz**, y rechazan una raíz equivocada. Y dentro de QEMU, `BN "get https://..."` con `ROOTS.DER` en el
     disco dice "certificado verificado".
 
+## BNM (BOS Net Manager): la red pasa por aquí
+`BNM` es el gestor de red: en vez de llamar a una pila concreta, la red pasa por BNM, que **decide**:
+1. Si **BN da servicio** (hay tarjeta e1000 y DHCP responde), sirve la petición con BN (HTTP/HTTPS con TLS propio y verificado).
+2. Si BN no da servicio (sin tarjeta, sin DHCP/enlace, o no pudo con esa petición), **pasa a iPXE** (`NET.BIN`) de reserva.
+3. Si iPXE tampoco puede (no está `NET.BIN` o también falla), da `SIN CONEXION - Cable o Red?`.
+
+```
+BNM "get http://10.0.2.2:8080/x"      la baja por BN; si BN no puede, por iPXE; si no, error de conexión
+BNM "get https://servidor/x"          igual, con TLS propio cuando va por BN
+```
+El fallback a iPXE usa el mismo buzón que PKG (`bosstash` -> memoria fija), así la respuesta vuelve igual. Probado en QEMU:
+con tarjeta sirve por BN (`[BNM: servido por BN]`); con `-nic none` no hay BN ni iPXE y da `SIN CONEXION - Cable o Red?`.
+
+**PKG y FORO ya pasan por BNM.** En vez de llamar a `NET` (iPXE) directo, PKG (lista y descarga de programas) y FORO (lista de
+hilos y leer un hilo) llaman a BNM con `@bnm fetch <list|app> <url>`: BN baja la página y la deja en el mismo buzón `BSTH`
+(`LIST_ADDR` / `APP_BASE`) que esperaban, con de-chunking para respuestas troceadas. Probado contra un hub local: PKG baja la
+lista y un programa (`[BNM: 553 bytes por BN]`), verifica el SHA-256 y lo ejecuta; FORO baja la lista de hilos; todo por BN,
+con iPXE de reserva automática. **Las subidas** (PKG `S`, FORO responder) siguen en iPXE por ahora (BN aún no hace POST).
+**COSMOS** sigue en iPXE también: trocea URLs largas y cachea la config de red, así que su migración es aparte.
+
 **BN es ahora la pila de red principal de BASIC-OS; iPXE queda de reserva.** BN hace DHCP, DNS, HTTP y HTTPS con TLS 1.3 propio
 y verificado, todo en C puro. iPXE (`NET`) **no se borra**: se queda como respaldo por si BN no soporta algo todavía (una curva o
 cifrado raro, Wi-Fi, o si falta `ROOTS.DER`). Lo que aún usa iPXE: **PKG, FORO y COSMOS** (el hub de Render y GitHub); migrarlos

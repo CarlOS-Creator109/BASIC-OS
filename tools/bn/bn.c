@@ -111,7 +111,7 @@ static struct txd *txr;
 static u8 *rxbuf;
 static u8 *txbuf;
 static u8 *httpbuf;                     /* cuerpo de la respuesta HTTP, en el banco */
-#define HTTPMAX (8u * 1024 * 1024)
+#define HTTPMAX (24u * 1024 * 1024)
 static u32 rx_tail, tx_tail;
 static u8  mac[6];           /* la que usamos (con la firma IMBOS) */
 static u8  real_mac[6];      /* la que trae la tarjeta */
@@ -722,11 +722,41 @@ static u32 host_ip(const char *host)
     if (ip) { prip(ip); pr("\n"); } else pr("(no resolvio)\n");
     return ip;
 }
-static int do_get(const char *url)
+/* ¿la cabecera [0,hs) tiene "transfer-encoding: chunked"? */
+static int is_chunked(int hs)
+{
+    int i; const char *k = "transfer-encoding:";
+    for (i = 0; i < hs; i++) {
+        int j = 0; while (k[j] && i + j < hs && lower((char)httpbuf[i + j]) == k[j]) j++;
+        if (!k[j]) { int p = i + j; while (p < hs && httpbuf[p] == ' ') p++; return (p + 7 <= hs && lower((char)httpbuf[p]) == 'c'); }
+    }
+    return 0;
+}
+/* decodifica el cuerpo chunked en su sitio; devuelve la nueva longitud del cuerpo */
+static int dechunk(int hs, int total)
+{
+    int rp = hs, wp = hs;
+    while (rp < total) {
+        int sz = 0; char c;
+        while (rp < total && (c = (char)httpbuf[rp]) != '\r') { int d; if (c >= '0' && c <= '9') d = c - '0'; else if (c >= 'a' && c <= 'f') d = c - 'a' + 10; else if (c >= 'A' && c <= 'F') d = c - 'A' + 10; else break; sz = sz * 16 + d; rp++; }
+        while (rp < total && httpbuf[rp] != '\n') rp++;
+        rp++;                                       /* salta \n */
+        if (sz <= 0) break;
+        if (rp + sz > total) sz = total - rp;
+        { int k; for (k = 0; k < sz; k++) httpbuf[wp + k] = httpbuf[rp + k]; }
+        wp += sz; rp += sz;
+        if (rp + 2 <= total && httpbuf[rp] == '\r') rp += 2;   /* \r\n tras el chunk */
+    }
+    return wp;
+}
+
+/* baja una URL a httpbuf. Devuelve 0 si llegó respuesta; *status = código HTTP, [*bs,*total) = cuerpo (ya de-chunked). */
+static int http_fetch(const char *url, int *status, int *bs, int *total)
 {
     char host[128]; const char *path; u16 port; u32 ip; int use_tls;
     static char req[400];
-    int rl = 0, i, bodyn;
+    int rl = 0, i, bodyn, hs = -1;
+    *status = 0; *bs = 0; *total = 0;
     if (url_parse(url, host, sizeof host, &port, &path, &use_tls)) return 1;
     ip = host_ip(host);
     if (!ip) return 1;
@@ -761,19 +791,28 @@ static int do_get(const char *url)
         bodyn = tcp_recv(httpbuf, HTTPMAX - 1);
     }
     tcp_close();
-    httpbuf[bodyn] = 0;
     if (bodyn <= 0) { pr("BN: sin respuesta\n"); return 1; }
+    httpbuf[bodyn] = 0;
 
-    /* cabecera / cuerpo */
+    for (i = 0; i + 3 < bodyn; i++)
+        if (httpbuf[i] == '\r' && httpbuf[i+1] == '\n' && httpbuf[i+2] == '\r' && httpbuf[i+3] == '\n') { hs = i + 4; break; }
+    if (hs < 0) hs = 0;
+    /* código de estado: "HTTP/1.x NNN" */
+    { int p = 0; while (p < bodyn && httpbuf[p] != ' ') p++; p++; while (p < bodyn && httpbuf[p] >= '0' && httpbuf[p] <= '9') { *status = *status * 10 + (httpbuf[p] - '0'); p++; } }
+    if (is_chunked(hs)) bodyn = dechunk(hs, bodyn);
+    *bs = hs; *total = bodyn;
+    return 0;
+}
+
+static int do_get(const char *url)
+{
+    int status, hs, bodyn, i;
+    if (http_fetch(url, &status, &hs, &bodyn)) return 1;
     {
-        int hs = -1;
-        for (i = 0; i + 3 < bodyn; i++)
-            if (httpbuf[i] == '\r' && httpbuf[i+1] == '\n' && httpbuf[i+2] == '\r' && httpbuf[i+3] == '\n') { hs = i + 4; break; }
         /* primera linea de estado */
         pr("--- ");
         for (i = 0; i < bodyn && httpbuf[i] != '\r' && i < 60; i++) { char c[2] = { (char)httpbuf[i], 0 }; pr(c); }
         pr(" ---\n");
-        if (hs < 0) hs = 0;
         /* imprime el cuerpo (hasta ~4 KB para no inundar la consola) */
         {
             int shown = bodyn - hs, lim = shown > 4096 ? 4096 : shown, j;
@@ -785,6 +824,95 @@ static int do_get(const char *url)
     return 0;
 }
 
+/* ================================================================= BNM (BOS Net Manager) ============
+ * La red pasa por aquí: primero intenta con BN; si BN no da servicio (sin tarjeta, sin DHCP, o no pudo con la
+ * petición), pasa a iPXE (NET.BIN) de reserva; si tampoco, da "SIN CONEXION - Cable o Red?". */
+#define MBOX_ADDR  0xB100000u
+#define LIST_ADDR  0xB000000u
+#define APP_BASE   0x9000000u
+#define LIST_MAX   0x100000u
+#define APP_MAX    0x2000000u
+#define MBOX_MAGIC 0x48545342u                      /* 'BSTH' (el mismo buzón que usa PKG) */
+struct mbox { u32 magic, app_len, list_len, spare; };
+
+/* reserva: iPXE baja la URL y la deja con bosstash en LIST_ADDR (label "list") o APP_BASE (label "app").
+ * 0 = lo logró. Si display, además lo muestra. */
+static int ipxe_run(const char *label, const char *url, int display)
+{
+    struct mbox *m = (struct mbox *)(unsigned long)MBOX_ADDR;
+    char *args = (char *)K->args; int i = 0, j;
+    m->magic = 0; m->list_len = 0; m->app_len = 0;
+    { const char *s = "dhcp;imgfetch -n bnm "; for (j = 0; s[j] && i < 158; j++) args[i++] = s[j]; }
+    for (j = 0; url[j] && i < 158; j++) args[i++] = url[j];
+    { const char *s = ";bosstash bnm "; for (j = 0; s[j] && i < 158; j++) args[i++] = s[j]; }
+    for (j = 0; label[j] && i < 158; j++) args[i++] = label[j];
+    args[i] = 0;
+    if (K->exec("NET.APP") < 0) return 1;            /* no está NET.APP/NET.BIN */
+    if (m->magic != MBOX_MAGIC) return 1;
+    { u32 n = ieq(label, "app") ? m->app_len : m->list_len;
+      if (n == 0) return 1;
+      if (display) { const char *p = (const char *)(unsigned long)LIST_ADDR; u32 k, lim = n > 4096 ? 4096 : n;
+          pr("--- iPXE ---\n");
+          for (k = 0; k < lim; k++) { char c[2] = { p[k], 0 }; pr(c); }
+          if (n > lim) pr("\n[...]\n");
+          pr("\n("); prd(n); pr(" bytes)\n"); }
+    }
+    return 0;
+}
+
+/* modo gestor que entrega a memoria (para PKG/FORO/COSMOS): baja la URL con BN y, si no, con iPXE, y la deja en
+ * LIST_ADDR/APP_BASE con el buzón 'BSTH' igual que bosstash. 0 = lo logró (por quien sea). */
+static int bnm_stash(const char *label, const char *url)
+{
+    struct mbox *m = (struct mbox *)(unsigned long)MBOX_ADDR;
+    int is_app = ieq(label, "app");
+    u8 *target = (u8 *)(unsigned long)(is_app ? APP_BASE : LIST_ADDR);
+    u32 cap = is_app ? APP_MAX : LIST_MAX;
+    int ok = 0;
+    m->magic = 0; m->list_len = 0; m->app_len = 0;
+    if (nic_init() == 0) {
+        if (do_dhcp() == 0) {
+            int status = 0, bs = 0, tot = 0;
+            if (http_fetch(url, &status, &bs, &tot) == 0 && status >= 200 && status < 400 && tot > bs) {
+                u32 blen = (u32)(tot - bs); if (blen > cap) blen = cap;
+                memcpy(target, httpbuf + bs, blen);
+                m->magic = MBOX_MAGIC; if (is_app) m->app_len = blen; else m->list_len = blen;
+                ok = 1;
+                pr("[BNM: "); prd(blen); pr(" bytes por BN]\n");
+            } else { pr("BNM: BN no pudo con esta peticion (codigo "); prd((u32)status); pr("); paso a iPXE ...\n"); }
+        } else pr("BNM: BN sin servicio (sin DHCP); paso a iPXE ...\n");
+        K->ram(RAM_FREE, net_bank, 0, 0);
+    } else pr("BNM: sin tarjeta para BN; paso a iPXE ...\n");
+    if (ok) return 0;
+    if (ipxe_run(label, url, 0) == 0) { pr("[BNM: servido por iPXE (reserva)]\n"); return 0; }
+    pr("\nSIN CONEXION - Cable o Red?\n");
+    return 1;
+}
+
+static int bnm(const char *cmd)
+{
+    char url[256]; int i; const char *u = cmd;
+    if (istarts(u, "get")) { u += 3; while (*u == ' ') u++; }
+    if (!*u) { pr("BNM: falta la URL\n"); return 1; }
+    for (i = 0; u[i] && i < 255; i++) url[i] = u[i];   /* copia: K->args se reescribe en el fallback */
+    url[i] = 0;
+
+    pr("BNM (BOS Net Manager): probando BN ...\n");
+    if (nic_init() == 0) {
+        pr("  BN: tarjeta e1000, MAC IMBOS "); prmac(mac); pr("\n");
+        if (do_dhcp() == 0) {
+            pr("  DHCP: "); prip(my_ip); pr("\n");
+            if (do_get(url) == 0) { K->ram(RAM_FREE, net_bank, 0, 0); pr("[BNM: servido por BN]\n"); return 0; }
+            pr("BNM: BN no pudo con esta petición; paso a iPXE (reserva) ...\n");
+        } else pr("BNM: BN sin servicio (sin DHCP / sin enlace); paso a iPXE (reserva) ...\n");
+        K->ram(RAM_FREE, net_bank, 0, 0);
+    } else pr("BNM: no hay tarjeta e1000 para BN; paso a iPXE (reserva) ...\n");
+
+    if (ipxe_run("list", url, 1) == 0) { pr("[BNM: servido por iPXE (reserva)]\n"); return 0; }
+    pr("\nSIN CONEXION - Cable o Red?\n");
+    return 1;
+}
+
 /* ================================================================= entrada ============ */
 int mod_main(const struct kapi *k)
 {
@@ -792,6 +920,19 @@ int mod_main(const struct kapi *k)
     K = k;
     a = K->args ? K->args : "";
     while (*a == ' ') a++;
+
+    if (istarts(a, "@bnm")) {
+        a += 4; while (*a == ' ') a++;
+        if (istarts(a, "fetch")) {                   /* modo para apps: "@bnm fetch <label> <url>" -> memoria */
+            char label[8]; int n = 0;
+            a += 5; while (*a == ' ') a++;
+            while (*a && *a != ' ' && n < 7) label[n++] = *a++;
+            label[n] = 0;
+            while (*a == ' ') a++;
+            return bnm_stash(label, a);
+        }
+        return bnm(a);                                /* modo consola: "@bnm get <url>" -> pantalla */
+    }
 
     if (nic_init()) return 1;
     pr("BN: tarjeta e1000\n  MAC real:  "); prmac(real_mac);

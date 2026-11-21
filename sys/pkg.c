@@ -218,6 +218,21 @@ static int run_net(const char *s)
     return K->exec("NET.APP");
 }
 
+/* ---- bajar por BNM (BOS Net Manager): BN primero, iPXE de reserva; deja el resultado en el buzon 'BSTH' ----
+ * label = "list" (-> LIST_ADDR) o "app" (-> APP_BASE). La URL es a+b+c (hub + sufijo). */
+static int run_bnm(const char *label, const char *a, const char *b, const char *c)
+{
+    char *args = (char *)K->args;
+    const char *parts[6];
+    int i = 0, q, j;
+    parts[0] = "@bnm fetch "; parts[1] = label; parts[2] = " "; parts[3] = a; parts[4] = b; parts[5] = c;
+    for (q = 0; q < 6; q++)
+        for (j = 0; parts[q] && parts[q][j] && i < 159; j++)
+            args[i++] = parts[q][j];
+    args[i] = 0;
+    return K->exec("BN.APP");
+}
+
 static int build_cmd(char *dst, int max, const char *a, const char *b, const char *c, const char *d, const char *e)
 {
     const char *p[5];
@@ -325,15 +340,10 @@ static void parse_list(void)
 
 static int fetch_list(void)
 {
-    char cmd[160];
     const struct mbox *m = (const struct mbox *)(unsigned long)MBOX_ADDR;
     pr("\nBajando la lista de "); pr(hub); pr(" ...\n");
     clear_mbox();
-    if (!build_cmd(cmd, sizeof cmd, "dhcp;imgfetch -n hublist ", hub, "/list;bosstash hublist list", 0, 0)) {
-        pr("PKG: la direccion del hub es demasiado larga\n");
-        return 0;
-    }
-    run_net(cmd);
+    run_bnm("list", hub, "/list", 0);
     if (m->magic != MBOX_MAGIC || m->list_len == 0) {
         pr("\nPKG: no pude bajar la lista. Revisa el cable de red, la direccion del hub (HUB.CFG)\n"
            "y que el hub este despierto (en Render gratis tarda ~1 minuto la primera vez).\n");
@@ -591,17 +601,13 @@ static int run_disk(int i)
 
 static int run_app(int i)
 {
-    char cmd[160], sum[65];
+    char sum[65];
     const struct mbox *m = (const struct mbox *)(unsigned long)MBOX_ADDR;
     u32 n;
 
     pr("\nBajando "); pr(apps[i].name); pr(" ...\n");
     clear_mbox();
-    if (!build_cmd(cmd, sizeof cmd, "dhcp;imgfetch -n app ", hub, "/get/", apps[i].name, ";bosstash app app")) {
-        pr("PKG: la linea de comandos es demasiado larga (acorta la direccion del hub)\n");
-        return 0;
-    }
-    run_net(cmd);
+    run_bnm("app", hub, "/get/", apps[i].name);
     if (m->magic != MBOX_MAGIC || m->app_len == 0) {
         pr("\nPKG: la descarga fallo.\n");
         return 0;

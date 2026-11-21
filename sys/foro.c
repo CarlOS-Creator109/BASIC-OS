@@ -160,6 +160,20 @@ static int run_net(const char *s)
     return K->exec("NET.APP");
 }
 
+/* bajar por BNM (BN primero, iPXE de reserva); deja el resultado en el buzon 'BSTH' como bosstash */
+static int run_bnm(const char *label, const char *a, const char *b)
+{
+    char *args = (char *)K->args;
+    const char *parts[5];
+    int i = 0, q, j;
+    parts[0] = "@bnm fetch "; parts[1] = label; parts[2] = " "; parts[3] = a; parts[4] = b;
+    for (q = 0; q < 5; q++)
+        for (j = 0; parts[q] && parts[q][j] && i < 159; j++)
+            args[i++] = parts[q][j];
+    args[i] = 0;
+    return K->exec("BN.APP");
+}
+
 static int build_cmd(char *dst, int max, const char *a, const char *b, const char *c, const char *d, const char *e)
 {
     const char *p[5];
@@ -178,14 +192,9 @@ static int build_cmd(char *dst, int max, const char *a, const char *b, const cha
 /* baja HUB + path a LIST_ADDR; devuelve los bytes (0 si fallo). El texto queda terminado en 0. */
 static u32 fetch(const char *path)
 {
-    char cmd[160];
     const struct mbox *m = (const struct mbox *)(unsigned long)MBOX_ADDR;
     clear_mbox();
-    if (!build_cmd(cmd, sizeof cmd, "dhcp;imgfetch -n hublist ", hub, path, ";bosstash hublist list", 0)) {
-        pr("FORO: la direccion del hub es demasiado larga\n");
-        return 0;
-    }
-    run_net(cmd);
+    run_bnm("list", hub, path);
     if (m->magic != MBOX_MAGIC || m->list_len == 0 || m->list_len >= LIST_MAX)
         return 0;
     ((char *)(unsigned long)LIST_ADDR)[m->list_len] = 0;
