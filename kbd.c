@@ -121,7 +121,7 @@ const char *kbd_layout_name(int l, int longname)
 #define QSIZE 1024
 static u8 queue[QSIZE];
 static int qhead, qtail;
-static int shift, caps, altgr, ext, esc_flag;
+static int shift, caps, altgr, ctrl, ext, esc_flag;
 
 /* ---- entrada cruda: scancodes tal cual (DOOM y otros juegos de pantalla completa) ---- */
 #define RQSIZE 512
@@ -250,6 +250,10 @@ void kbd_poll(void)
                 altgr = 1;
             else if (sc == 0xB8)
                 altgr = 0;
+            else if (sc == 0x1D)
+                ctrl = 1;               /* Ctrl derecho (E0 1D) */
+            else if (sc == 0x9D)
+                ctrl = 0;
             else if (sc == 0x48)
                 push(145);              /* flechas: codigos PETSCII del cursor */
             else if (sc == 0x50)
@@ -264,10 +268,16 @@ void kbd_poll(void)
             u8 k = sc & 0x7F;
             if (k == 0x2A || k == 0x36)
                 shift = 0;
+            else if (k == 0x1D)
+                ctrl = 0;
             continue;
         }
         if (sc == 0x2A || sc == 0x36) {
             shift = 1;
+            continue;
+        }
+        if (sc == 0x1D) {               /* Ctrl izquierdo */
+            ctrl = 1;
             continue;
         }
         if (sc == 0x3A) {
@@ -280,7 +290,9 @@ void kbd_poll(void)
         }
         if (sc < 0x57) {
             u8 base = map_n[sc], c;
-            if (altgr)
+            if (ctrl && base >= 'a' && base <= 'z')
+                c = (u8)(base & 0x1F);                          /* Ctrl+letra -> 1..26 (^A..^Z) */
+            else if (altgr)
                 c = map_g[sc];
             else if (is_letter(base))
                 c = (caps ^ shift) ? base : to_upper(base);     /* MAYUSCULAS por defecto */

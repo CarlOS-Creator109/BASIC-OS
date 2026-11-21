@@ -85,6 +85,7 @@ static const struct item items[] = {
     { "ARCHIVOS",    "FILES.ICB", "FILES.APP", 'F' },
     { "DOOM",        "DOOM.ICB",  "DOOM.APP",  'D' },
     { "COSMOS",      "COSMOS.ICB","COSMOS.APP",'N' },
+    { "EDITOR",      "EDITOR.ICB","EDITOR.APP",'E' },
 };
 #define NITEMS ((int)(sizeof items / sizeof items[0]))
 static struct icon icons[NITEMS];

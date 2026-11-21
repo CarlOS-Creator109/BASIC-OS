@@ -1770,7 +1770,7 @@ static void st_help(void)
     puts_("SOUND KICK|SNARE,HZ,MS  HIHAT,MS  OFF\n");
     puts_("SOUND DRUMKIT,HZ,KIT(0-3),MS  SNDWAIT\n");
     puts_("CDTOC CDPLAY [N] CDSTOP CDEJECT CDSTAT\n");
-    puts_("DESKTOP  YAAI  BASHTERM  TINYCORE  NET  BN  BNM  PKG  FORO  KEYB  RAM  TAREAS  INSTALL  PLAY \"X.BVC\"  SAY \"TEXTO\"  EXEC \"X.APP\"  LOAD \"\" = PONG\n");
+    puts_("DESKTOP  YAAI  BASHTERM  TINYCORE  NET  BN  BNM  PKG  FORO  KEYB  RAM  TAREAS  INSTALL  EDITOR \"X.C\"  PLAY \"X.BVC\"  SAY \"TEXTO\"  EXEC \"X.APP\"  LOAD \"\" = PONG\n");
     puts_("LOCATE COL,ROW  (TEXT CURSOR)\n");
     puts_("UNIX = LS CAT RM CLEAR MAN... (ATAJOS PARA LINUX)\n");
     puts_("PCI = LIST PCI DEVICES\n");
@@ -2047,6 +2047,25 @@ static void exec_statement(void)
         }
         net_args[j] = 0;
         r = plat_exec("BN.APP");
+        if (r < 0)
+            exec_fail(r);
+    } else if (kw("EDITOR")) {
+        int r, i = 0;
+        net_args[0] = 0;
+        skip_ws();
+        if (*tp == '"') {                         /* EDITOR "PROGRAMA.C" */
+            if (!get_spec())
+                return;
+            for (i = 0; spec[i] && i < (int)sizeof net_args - 1; i++)
+                net_args[i] = spec[i];
+        } else {                                  /* EDITOR PROGRAMA.C (sin comillas) */
+            while (*tp && i < (int)sizeof net_args - 1)
+                net_args[i++] = *tp++;
+            while (i > 0 && net_args[i - 1] == ' ')
+                i--;
+        }
+        net_args[i] = 0;
+        r = plat_exec("EDITOR.APP");
         if (r < 0)
             exec_fail(r);
     } else if (kw("PLAY")) {

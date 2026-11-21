@@ -87,7 +87,7 @@ kernel.bin: kernel.elf
 MODLD := ld -m $(LDEMU) -T mod.ld -nostdlib -z noexecstack --no-warn-rwx-segments
 SYSDIR := sys
 SYSFILES := GUI.SYS=$(SYSDIR)/GUI.SYS PONG.APP=$(SYSDIR)/PONG.APP CALC.APP=$(SYSDIR)/CALC.APP \
-            FILES.APP=$(SYSDIR)/FILES.APP YAAI.APP=$(SYSDIR)/YAAI.APP BASHTERM.APP=$(SYSDIR)/BASHTERM.APP TINYCORE.APP=$(SYSDIR)/TINYCORE.APP NET.APP=$(SYSDIR)/NET.APP BN.APP=$(SYSDIR)/BN.APP DOOM.APP=$(SYSDIR)/DOOM.APP PKG.APP=$(SYSDIR)/PKG.APP FORO.APP=$(SYSDIR)/FORO.APP INSTALL.APP=$(SYSDIR)/INSTALL.APP PLAY.APP=$(SYSDIR)/PLAY.APP SAY.APP=$(SYSDIR)/SAY.APP COSMOS.APP=$(SYSDIR)/COSMOS.APP PONG.BAS=$(SYSDIR)/pong.bas \
+            FILES.APP=$(SYSDIR)/FILES.APP YAAI.APP=$(SYSDIR)/YAAI.APP BASHTERM.APP=$(SYSDIR)/BASHTERM.APP TINYCORE.APP=$(SYSDIR)/TINYCORE.APP NET.APP=$(SYSDIR)/NET.APP BN.APP=$(SYSDIR)/BN.APP DOOM.APP=$(SYSDIR)/DOOM.APP PKG.APP=$(SYSDIR)/PKG.APP FORO.APP=$(SYSDIR)/FORO.APP INSTALL.APP=$(SYSDIR)/INSTALL.APP PLAY.APP=$(SYSDIR)/PLAY.APP SAY.APP=$(SYSDIR)/SAY.APP COSMOS.APP=$(SYSDIR)/COSMOS.APP EDITOR.APP=$(SYSDIR)/EDITOR.APP PONG.BAS=$(SYSDIR)/pong.bas \
             $(foreach i,$(wildcard icons/*.icb),$(shell echo $(notdir $(i)) | tr a-z A-Z)=$(i))
 
 # ARCH=32: estas apps dependen del modo largo (arrancan Linux de 64 bits, iPXE de 64 bits o el motor DOOM de 64 bits)
@@ -127,6 +127,7 @@ $(eval $(call APP,PLAY,play,0x6D0000))
 $(eval $(call APP,SAY,say,0x6E0000))
 $(eval $(call APP,COSMOS,cosmosapp,0x690000))
 $(eval $(call APP,BN,bnapp,0x6D8000))
+$(eval $(call APP,EDITOR,editor,0x700000))
 
 # SAY usa SSE2 (el modulo lo activa solo): sin -mgeneral-regs-only y sin libm
 $(SYSDIR)/say.o: $(SYSDIR)/say.c kapi.h mod_head.h
