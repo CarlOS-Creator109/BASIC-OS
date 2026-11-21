@@ -363,8 +363,10 @@ int tls_connect(tls_conn *c, void *io, tls_send_fn snd, tls_recv_fn rcv, const c
         sha256_update(&c->th, msg, mlen);
     }
 
-    /* verificar el certificado: firma del handshake (CertificateVerify), cadena hasta una raíz y nombre del host */
-    if (tls_verify(c)) { log_(c, "TLS: el certificado no es de fiar\n"); if (c->roots) return -2; }
+    /* verificar el certificado solo si hay raíces de confianza: sin ellas no se puede autenticar, y la verificación
+     * (ECDSA/RSA) es cara — no tiene sentido pagarla para tirarla. Con raíces, un fallo es fatal. */
+    if (c->roots) { if (tls_verify(c)) { log_(c, "TLS: el certificado no es de fiar\n"); return -2; } }
+    else c->verified = 0;
 
     /* claves de aplicacion (con el transcript hasta el Finished del servidor) */
     derive_app(c);

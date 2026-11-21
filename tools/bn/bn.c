@@ -615,7 +615,7 @@ static int tcp_send(const u8 *data, int n)
 static int tcp_recv(u8 *out, int max)
 {
     int got = 0, sl, idle = 0;
-    while (idle < 15) {                             /* ~ varios segundos sin datos => fin */
+    while (idle < 50) {                             /* ~ varios segundos sin datos => fin */
         if (!tcp_in(400, &sl)) { idle++; continue; }
         idle = 0;
         int thl = (tcpseg[12] >> 4) * 4, dn = sl - thl;
@@ -651,7 +651,7 @@ static int tcp_stream_read(u8 *out, int max)
     if (sb_pos < sb_len) { int t = sb_len - sb_pos; if (t > max) t = max; memcpy(out, sb + sb_pos, t); sb_pos += t; return t; }
     if (t_state == 2) return 0;
     for (;;) {
-        if (!tcp_in(8000, &sl)) return -1;
+        if (!tcp_in(20000, &sl)) return -1;
         int thl = (tcpseg[12] >> 4) * 4, dn = sl - thl; u8 fl = tcpseg[13]; u32 seq = rd32(tcpseg + 4);
         if (fl & 0x04) { t_state = 0; return 0; }               /* RST */
         if (dn > 0 && seq == t_rcv) {

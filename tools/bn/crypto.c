@@ -382,63 +382,80 @@ static void bn_modexp(bn *r, const bn *base, const bn *exp, const bn *m) { bn re
 static void bn_inv(bn *r, const bn *a, const bn *m) { bn e, two; bn_zero(&two); two.v[0]=2; bn_sub(&e,m,&two); bn_modexp(r,a,&e,m); }   /* a^(m-2) */
 
 /* punto en afin; inf=1 => infinito */
-typedef struct { bn x, y; int inf; } pt;
-static void pt_dbl(pt *r, const pt *p)
+/* punto en coordenadas Jacobianas: (X,Y,Z) = afin (X/Z^2, Y/Z^3). Z=0 => infinito.
+ * Hace suma y doblado SIN inversiones (solo una inversion al final), ~100x mas rapido que afin. */
+typedef struct { bn X, Y, Z; } jpt;
+static void fsq(bn *r, const bn *a) { bn_mulmod(r, a, a, &P256P); }
+static void fmul(bn *r, const bn *a, const bn *b) { bn_mulmod(r, a, b, &P256P); }
+static void fadd(bn *r, const bn *a, const bn *b) { bn_addmod(r, a, b, &P256P); }
+static void fsub(bn *r, const bn *a, const bn *b) { bn_submod(r, a, b, &P256P); }
+static void j_dbl(jpt *r, const jpt *p)
 {
-    if (p->inf || bn_iszero(&p->y)) { r->inf = 1; return; }
-    bn l, t, t2, three, x3, y3;
-    /* lambda = (3x^2 - 3) / (2y)   (a = -3) */
-    bn_mulmod(&t, &p->x, &p->x, &P256P);            /* x^2 */
-    bn_zero(&three); three.v[0]=3; bn_mulmod(&t, &t, &three, &P256P);   /* 3x^2 */
-    bn sub3; bn_zero(&sub3); sub3.v[0]=3; bn_submod(&t, &t, &sub3, &P256P);   /* 3x^2 - 3 */
-    bn_addmod(&t2, &p->y, &p->y, &P256P);           /* 2y */
-    bn_inv(&t2, &t2, &P256P);
-    bn_mulmod(&l, &t, &t2, &P256P);
-    bn_mulmod(&x3, &l, &l, &P256P);                 /* l^2 */
-    bn_submod(&x3, &x3, &p->x, &P256P); bn_submod(&x3, &x3, &p->x, &P256P);   /* - 2x */
-    bn_submod(&y3, &p->x, &x3, &P256P); bn_mulmod(&y3, &l, &y3, &P256P); bn_submod(&y3, &y3, &p->y, &P256P);
-    bn_set(&r->x,&x3); bn_set(&r->y,&y3); r->inf=0;
+    bn delta, gamma, beta, alpha, t, u, X3, Y3, Z3;
+    if (bn_iszero(&p->Z)) { *r = *p; return; }
+    fsq(&delta, &p->Z);
+    fsq(&gamma, &p->Y);
+    fmul(&beta, &p->X, &gamma);
+    fsub(&t, &p->X, &delta); fadd(&u, &p->X, &delta); fmul(&t, &t, &u);   /* (X-d)(X+d), con a=-3 */
+    fadd(&alpha, &t, &t); fadd(&alpha, &alpha, &t);                        /* 3t */
+    fsq(&X3, &alpha);
+    fadd(&t, &beta, &beta); fadd(&t, &t, &t); fadd(&t, &t, &t);            /* 8beta */
+    fsub(&X3, &X3, &t);
+    fadd(&Z3, &p->Y, &p->Z); fsq(&Z3, &Z3); fsub(&Z3, &Z3, &gamma); fsub(&Z3, &Z3, &delta);
+    fadd(&t, &beta, &beta); fadd(&t, &t, &t); fsub(&t, &t, &X3); fmul(&Y3, &alpha, &t);
+    fsq(&u, &gamma); fadd(&u, &u, &u); fadd(&u, &u, &u); fadd(&u, &u, &u); /* 8 gamma^2 */
+    fsub(&Y3, &Y3, &u);
+    r->X = X3; r->Y = Y3; r->Z = Z3;
 }
-static void pt_add(pt *r, const pt *p, const pt *q)
+static void j_add(jpt *r, const jpt *a, const jpt *b)
 {
-    if (p->inf) { *r = *q; return; }
-    if (q->inf) { *r = *p; return; }
-    if (bn_cmp(&p->x,&q->x)==0) { if (bn_cmp(&p->y,&q->y)==0) { pt_dbl(r,p); return; } r->inf=1; return; }
-    bn l, dx, dy, x3, y3;
-    bn_submod(&dy, &q->y, &p->y, &P256P);
-    bn_submod(&dx, &q->x, &p->x, &P256P);
-    bn_inv(&dx, &dx, &P256P);
-    bn_mulmod(&l, &dy, &dx, &P256P);
-    bn_mulmod(&x3, &l, &l, &P256P); bn_submod(&x3,&x3,&p->x,&P256P); bn_submod(&x3,&x3,&q->x,&P256P);
-    bn_submod(&y3, &p->x, &x3, &P256P); bn_mulmod(&y3,&l,&y3,&P256P); bn_submod(&y3,&y3,&p->y,&P256P);
-    bn_set(&r->x,&x3); bn_set(&r->y,&y3); r->inf=0;
+    bn z1z1, z2z2, u1, u2, s1, s2, h, rr, i2, j, v, t, X3, Y3, Z3;
+    if (bn_iszero(&a->Z)) { *r = *b; return; }
+    if (bn_iszero(&b->Z)) { *r = *a; return; }
+    fsq(&z1z1, &a->Z); fsq(&z2z2, &b->Z);
+    fmul(&u1, &a->X, &z2z2); fmul(&u2, &b->X, &z1z1);
+    fmul(&s1, &a->Y, &b->Z); fmul(&s1, &s1, &z2z2);
+    fmul(&s2, &b->Y, &a->Z); fmul(&s2, &s2, &z1z1);
+    fsub(&h, &u2, &u1);
+    fsub(&rr, &s2, &s1); fadd(&rr, &rr, &rr);
+    if (bn_iszero(&h)) { if (bn_iszero(&rr)) { j_dbl(r, a); return; } bn_zero(&r->X); bn_zero(&r->Y); bn_zero(&r->Z); return; }
+    fadd(&t, &h, &h); fsq(&i2, &t);
+    fmul(&j, &h, &i2);
+    fmul(&v, &u1, &i2);
+    fsq(&X3, &rr); fsub(&X3, &X3, &j); fsub(&X3, &X3, &v); fsub(&X3, &X3, &v);
+    fsub(&t, &v, &X3); fmul(&Y3, &rr, &t); fmul(&t, &s1, &j); fadd(&t, &t, &t); fsub(&Y3, &Y3, &t);
+    fadd(&Z3, &a->Z, &b->Z); fsq(&Z3, &Z3); fsub(&Z3, &Z3, &z1z1); fsub(&Z3, &Z3, &z2z2); fmul(&Z3, &Z3, &h);
+    r->X = X3; r->Y = Y3; r->Z = Z3;
 }
-static void pt_mul(pt *r, const bn *k, const pt *p)
+static void j_mul(jpt *r, const bn *k, const bn *px, const bn *py)       /* k * (afin px,py) */
 {
-    pt acc; acc.inf = 1; int i;
-    for (i = 255; i >= 0; i--) { pt t; pt_dbl(&t, &acc); acc = t; if (bn_bit(k,i)) { pt_add(&t, &acc, p); acc = t; } }
+    jpt acc, P; int i;
+    bn_zero(&acc.X); bn_zero(&acc.Y); bn_zero(&acc.Z);                    /* infinito */
+    bn_set(&P.X, px); bn_set(&P.Y, py); bn_zero(&P.Z); P.Z.v[0] = 1;
+    for (i = 255; i >= 0; i--) { jpt t; j_dbl(&t, &acc); acc = t; if (bn_bit(k, i)) { j_add(&t, &acc, &P); acc = t; } }
     *r = acc;
 }
 static void bn_frombe(bn *r, const u8 *p) { int i; for (i=0;i<4;i++){ u64 w=0,k; for(k=0;k<8;k++) w=w<<8|p[i*8+k]; r->v[3-i]=w; } }
 
 int ecdsa_p256_verify(const u8 pub[64], const u8 *hash, int hlen, const u8 r[32], const u8 s[32])
 {
-    bn rr, ss, z, w, u1, u2; pt Q, R, G, A, B;
+    bn rr, ss, z, w, u1, u2, zinv, z2, x; jpt A, B, R;
     bn_frombe(&rr, r); bn_frombe(&ss, s);
     if (bn_iszero(&rr) || bn_iszero(&ss) || bn_cmp(&rr,&P256N)>=0 || bn_cmp(&ss,&P256N)>=0) return 0;
-    /* z = los hlen*8 bits mas a la izquierda del hash; para P-256 usamos 32 bytes */
-    { u8 zb[32]; int i; int n = hlen < 32 ? hlen : 32; for (i=0;i<32;i++) zb[i]=0; for (i=0;i<n;i++) zb[i]=hash[i]; bn_frombe(&z, zb); if (hlen > 32) { /* truncar a 256 bits ya hecho */ } }
-    bn_set(&G.x,&P256GX); bn_set(&G.y,&P256GY); G.inf=0;
-    bn_frombe(&Q.x, pub); bn_frombe(&Q.y, pub+32); Q.inf=0;
-    bn_inv(&w, &ss, &P256N);
+    { u8 zb[32]; int i, n = hlen < 32 ? hlen : 32; for (i=0;i<32;i++) zb[i]=0; for (i=0;i<n;i++) zb[i]=hash[i]; bn_frombe(&z, zb); }
+    bn_inv(&w, &ss, &P256N);                        /* w = s^-1 mod n */
     bn_mulmod(&u1, &z, &w, &P256N);
     bn_mulmod(&u2, &rr, &w, &P256N);
-    pt_mul(&A, &u1, &G);
-    pt_mul(&B, &u2, &Q);
-    pt_add(&R, &A, &B);
-    if (R.inf) return 0;
-    /* R.x mod n == r ? */
-    { bn xn; bn_set(&xn,&R.x); if (bn_cmp(&xn,&P256N)>=0) bn_sub(&xn,&xn,&P256N); return bn_cmp(&xn,&rr)==0 ? 1 : 0; }
+    { bn qx, qy; bn_frombe(&qx, pub); bn_frombe(&qy, pub + 32);
+      j_mul(&A, &u1, &P256GX, &P256GY);             /* u1*G */
+      j_mul(&B, &u2, &qx, &qy); }                   /* u2*Q */
+    j_add(&R, &A, &B);
+    if (bn_iszero(&R.Z)) return 0;
+    bn_inv(&zinv, &R.Z, &P256P);                    /* la unica inversion de todo el verify */
+    fsq(&z2, &zinv);
+    fmul(&x, &R.X, &z2);                            /* x afin = X / Z^2 */
+    if (bn_cmp(&x,&P256N) >= 0) bn_sub(&x,&x,&P256N);
+    return bn_cmp(&x,&rr) == 0 ? 1 : 0;
 }
 
 /* ================================================================= RSA (verificar firma) ============ */
@@ -478,7 +495,8 @@ static int rsa_pub(u8 *out, const u8 *n, int nlen, const u8 *e, int elen, const 
     if (L > RL || inlen > nlen) return -1;
     big_frombe(N, L, n, nlen); big_frombe(B, L, in, inlen);
     if (big_cmp(B, N, L) >= 0) return -1;
-    for (i = 0; i < L; i++) R[i] = 0; R[0] = 1;
+    for (i = 0; i < L; i++) R[i] = 0;
+    R[0] = 1;
     for (i = elen * 8 - 1; i >= 0; i--) {
         bit = (e[elen - 1 - (i >> 3)] >> (i & 7)) & 1;
         if (!started) { if (!bit) continue; started = 1; }
@@ -501,7 +519,8 @@ static void mgf1(const u8 *seed, int sl, u8 *mask, int mlen, int hl)
     u8 cnt[4], h[64], buf[256 + 4]; int i, done = 0; u32 c = 0;
     while (done < mlen) {
         cnt[0]=(u8)(c>>24);cnt[1]=(u8)(c>>16);cnt[2]=(u8)(c>>8);cnt[3]=(u8)c;
-        for (i = 0; i < sl; i++) buf[i] = seed[i]; buf[sl]=cnt[0];buf[sl+1]=cnt[1];buf[sl+2]=cnt[2];buf[sl+3]=cnt[3];
+        for (i = 0; i < sl; i++) buf[i] = seed[i];
+        buf[sl]=cnt[0];buf[sl+1]=cnt[1];buf[sl+2]=cnt[2];buf[sl+3]=cnt[3];
         hash_by_len(hl, buf, sl + 4, h);
         for (i = 0; i < hl && done < mlen; i++) mask[done++] ^= h[i];
         c++;
