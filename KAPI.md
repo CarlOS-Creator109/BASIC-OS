@@ -18,7 +18,7 @@ El kernel carga el módulo (PCBM plano o ELF, ver `ELF-LOADER.md`), y llama a `m
 Dentro no hay libc: nada de `printf`, `malloc`, `memcpy`… solo `K`. Si necesitas memoria, pídela con
 `K->ram`. Si necesitas copiar bytes, escribe tu propio bucle.
 
-**Versión actual: `KAPI_VER 10`** (campo `K->ver`). Los campos se agregan al final entre versiones;
+**Versión actual: `KAPI_VER 11`** (campo `K->ver`). Los campos se agregan al final entre versiones;
 los viejos no se mueven, así que un módulo viejo sigue cargando. Comprueba `K->ver >= N` antes de usar
 algo de una versión nueva.
 
@@ -150,6 +150,56 @@ Cada consola tiene su plano de texto y su plano de `PLOT`.
 | Función | Qué hace |
 | --- | --- |
 | `int vid(int op,const unsigned char *chars,int w,int h)` | `op 0`=iniciar (`cols\|filas<<16`), `1`=cuadro, `2`=fin. |
+
+---
+
+## Archivos por descriptor *(v11)*
+
+El modelo de E/S de Unix: cada descriptor lleva **su propia posición**, así que se lee y escribe por
+tramos y te puedes mover con `f_seek`. Es la base sobre la que después se pueden construir pipes y
+redirección. Para cargar un archivo entero de un golpe sigue estando `read`.
+
+| Función | Qué hace |
+| --- | --- |
+| `int f_open(const char *spec,int mode)` | Abre y devuelve el descriptor, o un `FDERR_*`. `mode` = `O_RD`/`O_WR`/`O_RDWR`, más `O_NEW` (crear o vaciar) y `O_APP` (escribir al final). |
+| `int f_read(int fd,void *buf,int n)` | Lee hasta `n` bytes desde la posición actual. `0` = fin de archivo. |
+| `int f_write(int fd,const void *buf,int n)` | Escribe `n` bytes en la posición actual. |
+| `int f_seek(int fd,int off,int whence)` | Mueve la posición. `whence` = `SEEK_SET`/`SEEK_CUR`/`SEEK_END`. Devuelve la posición nueva. |
+| `int f_close(int fd)` | Cierra y vuelca al disco si hubo cambios. |
+
+Errores: `FDERR_BADF` (-1), `FDERR_NOENT` (-2), `FDERR_MANY` (-3), `FDERR_NOMEM` (-4),
+`FDERR_BIG` (-5, por ahora 4 MB por descriptor), `FDERR_IO` (-6).
+
+> Por dentro, hoy, al abrir se trae el archivo entero a un banco de RAM y al cerrar se vuelca,
+> porque `fs.c` todavía no sabe leer desde un offset. La **interfaz** ya es la definitiva: el día
+> que el sistema de archivos lea por tramos se cambia `fd.c` por dentro y ningún programa se entera.
+
+---
+
+## La mini-libc (`sys/libc.h`)
+
+Una cabecera que te deja escribir programas como en Unix en vez de llamar a `K->algo` a mano:
+
+```c
+#include "sys/ui.h"      // declara K
+#include "sys/libc.h"
+...
+lc_init();                                     // una vez, antes de usar malloc
+char *p = c_malloc(128);
+int fd = c_open("HD0.1:/NOTAS.TXT", O_RDWR | O_NEW);
+c_write(fd, "hola\n", 5);
+c_close(fd);
+c_printf("listo: %s (%d)\n", p, c_strlen(p));
+c_free(p); lc_done();
+```
+
+- **Cadenas/memoria:** `c_strlen`, `c_strcmp`, `c_strncmp`, `c_strcpy`, `c_strlcpy`, `c_strcat`, `c_strchr`, `c_memcpy`, `c_memset`, `c_memcmp`, `c_atoi`, `c_itoa`
+- **Memoria dinámica:** `lc_init` / `lc_done`, `c_malloc`, `c_calloc`, `c_free` (primer hueco que sirva, con fusión al liberar, sobre un banco del asignador)
+- **Archivos:** `c_open`, `c_read`, `c_write`, `c_seek`, `c_close`, `c_fsize`
+- **Salida:** `c_puts`, `c_putchar`, `c_printf` (`%d %u %x %s %c %%`)
+
+Los nombres llevan `c_`/`lc_` para no chocar con el `memcpy`/`memset` del kernel. Ejemplo completo
+en `apps/libcdemo.c`.
 
 ---
 

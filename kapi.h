@@ -18,7 +18,7 @@
 #ifndef KAPI_H
 #define KAPI_H
 
-#define KAPI_VER 10
+#define KAPI_VER 11
 #define FONT_ADDR 0x6800            /* fuente 8x16: 16 bytes por caracter, 256 caracteres */
 
 /* tipos de SOUND (los usa tambien el kernel) */
@@ -58,6 +58,25 @@
 #define FSOP_KIND      5    /* data = char[8]: "BFS", "FAT16"... del disco de spec */
 #define FSOP_FORMAT    6    /* spec = "HD1.1:", data = etiqueta; segun el tipo en el MBR: 0xB0 BFS, 0x0B/0x0C FAT32,
                                0x04/0x06/0x0E FAT16 (max 2 GB) */
+
+/* v11: descriptores de archivo (f_open/f_read/f_write/f_seek/f_close). Cada descriptor lleva su
+ * propia posicion, como en Unix: es la base para despues tener pipes y redireccion. */
+#define O_RD    0
+#define O_WR    1
+#define O_RDWR  2
+#define O_NEW   4                   /* crear o vaciar el archivo */
+#define O_APP   8                   /* empezar a escribir al final */
+
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+
+#define FDERR_BADF  -1              /* descriptor no valido / modo equivocado */
+#define FDERR_NOENT -2              /* no existe */
+#define FDERR_MANY  -3              /* demasiados abiertos */
+#define FDERR_NOMEM -4              /* sin banco de RAM */
+#define FDERR_BIG   -5              /* no cabe (por ahora 4 MB por descriptor) */
+#define FDERR_IO    -6              /* fallo al escribir al cerrar */
 
 #define BTN_LEFT   1
 #define BTN_RIGHT  2
@@ -178,6 +197,14 @@ struct kapi {
     long (*task)(int op, void (*fn)(void *), void *arg, const char *name);
     /* v9: escribir en BFS; v10: tambien FAT16/32 (ver FSOP_*) */
     int (*fsop)(int op, const char *spec, const void *data, unsigned long long size, const char *spec2);
+    /* v11: descriptores de archivo, al estilo de Unix. Cada uno guarda su posicion, asi que se puede
+     * leer/escribir por tramos y moverse con f_seek. Es la base del modelo de E/S que despues permite
+     * pipes y redireccion. Para cargar un archivo entero de un golpe sigue estando K->read. */
+    int (*f_open)(const char *spec, int mode);          /* -> descriptor o FDERR_* */
+    int (*f_read)(int fd, void *buf, int n);            /* bytes leidos, 0 = fin */
+    int (*f_write)(int fd, const void *buf, int n);     /* bytes escritos */
+    int (*f_seek)(int fd, int off, int whence);         /* SEEK_SET/CUR/END -> posicion nueva */
+    int (*f_close)(int fd);                             /* vuelca al disco si hubo cambios */
 };
 
 /* codigos de retorno de mod_main */

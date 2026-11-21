@@ -178,6 +178,13 @@ u64  ram_api(int op, u64 a, unsigned n, const char *who);
 int  ram_line(int i, char *out);
 int  ram_ok(u64 addr);
 
+/* fd.c - descriptores de archivo (ver kapi.h: O_*, SEEK_*, FDERR_*) */
+int fd_open(const char *spec, int mode);
+int fd_read(int fd, void *buf, int n);
+int fd_write(int fd, const void *buf, int n);
+int fd_seek(int fd, int off, int whence);
+int fd_close(int fd);
+
 /* task.c: tareas cooperativas */
 void task_yield(void);
 int  task_others_ready(void);            /* task.c: hay otra tarea lista (para el reloj) */

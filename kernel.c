@@ -255,7 +255,8 @@ const struct kapi kernel_api = {
     (int (*)(const char *, int, unsigned long long, unsigned, void *))blk_api,
     api_saved,
     basic_do, basic_eval, vga_col,
-    fb_overlay, ram_api, task_api, api_fsop
+    fb_overlay, ram_api, task_api, api_fsop,
+    fd_open, fd_read, fd_write, fd_seek, fd_close
 };
 
 static int is_gui(const char *n)
