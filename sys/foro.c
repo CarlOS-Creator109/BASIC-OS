@@ -1,9 +1,10 @@
 /* foro.c - FORO.APP: foro de texto de BASIC-OS. Lee y escribe en el hub (hub/server.py, rutas /foro/...) por HTTPS;
  * el hub guarda cada hilo como un archivo del repo de GitHub, asi que GitHub es el "servidor" del foro.
  *
- * Flujo:  FORO.APP -> NET.APP (iPXE: dhcp + imgfetch https://HUB/foro/list + bosstash) -> memoria fija -> lista de hilos
- *         -> elegir uno -> NET.APP otra vez (imgfetch https://HUB/foro/hilo/ID) -> se muestra con pausas
- *         -> R = responder: NET.APP con bospost (POST https://HUB/foro/post con "BOSFORO 1\nCLAVE\nAUTOR\nHILO\nTITULO\n" + mensaje).
+ * Flujo:  FORO.APP -> BNM ("@bnm fetch list https://HUB/foro/list") -> memoria fija -> lista de hilos
+ *         -> elegir uno -> BNM otra vez (https://HUB/foro/hilo/ID) -> se muestra con pausas
+ *         -> R = responder: BNM ("@bnm post", POST a https://HUB/foro/post con "BOSFORO 1\nCLAVE\nAUTOR\nHILO\nTITULO\n" + mensaje).
+ * Toda la red pasa por BNM (BOS Net Manager): BN primero, iPXE de reserva. FORO ya no llama a NET.APP directamente.
  * Direccion del hub y clave: HUB.CFG en la particion FAT (1a linea = direccion, 2a = clave), igual que PKG. Sin clave no se escribe
  * (se pide al escribir). No hay direccion por defecto: FORO solo habla con el hub que tu pongas.
  * Uso:  FORO   (o EXEC "FORO.APP")     numero = leer ese hilo, N = hilo nuevo, R = recargar, U = direccion del hub,
@@ -143,22 +144,13 @@ static void ask_hub(void)
     hub[k] = 0;
 }
 
-/* ---- NET.APP con una linea de iPXE ---- */
+/* ---- el buzon 'BSTH' compartido con BNM/BN ---- */
 static void clear_mbox(void)
 {
     struct mbox *m = (struct mbox *)(unsigned long)MBOX_ADDR;
     m->magic = 0; m->app_len = 0; m->list_len = 0; m->spare = 0;
 }
 
-static int run_net(const char *s)
-{
-    char *a = (char *)K->args;                  /* el buffer net_args del kernel (160 bytes) */
-    int i;
-    for (i = 0; s[i] && i < 159; i++)
-        a[i] = s[i];
-    a[i] = 0;
-    return K->exec("NET.APP");
-}
 
 /* bajar por BNM (BN primero, iPXE de reserva); deja el resultado en el buzon 'BSTH' como bosstash */
 static int run_bnm(const char *label, const char *a, const char *b)
@@ -174,20 +166,21 @@ static int run_bnm(const char *label, const char *a, const char *b)
     return K->exec("BN.APP");
 }
 
-static int build_cmd(char *dst, int max, const char *a, const char *b, const char *c, const char *d, const char *e)
+/* ---- enviar por BNM: el cuerpo ya esta en APP_BASE y su tamano en el buzon (m->spare).
+ * BN lo manda por POST y, si no puede, BNM pasa a iPXE (bospost) solo. La URL es a+b. */
+static int run_bnm_post(const char *a, const char *b)
 {
-    const char *p[5];
-    int i, k = 0, j;
-    p[0] = a; p[1] = b; p[2] = c; p[3] = d; p[4] = e;
-    for (i = 0; i < 5; i++)
-        for (j = 0; p[i] && p[i][j]; j++) {
-            if (k >= max - 1)
-                return 0;
-            dst[k++] = p[i][j];
-        }
-    dst[k] = 0;
-    return 1;
+    char *args = (char *)K->args;
+    const char *parts[3];
+    int i = 0, q, j;
+    parts[0] = "@bnm post "; parts[1] = a; parts[2] = b;
+    for (q = 0; q < 3; q++)
+        for (j = 0; parts[q] && parts[q][j] && i < 159; j++)
+            args[i++] = parts[q][j];
+    args[i] = 0;
+    return K->exec("BN.APP");
 }
+
 
 /* baja HUB + path a LIST_ADDR; devuelve los bytes (0 si fallo). El texto queda terminado en 0. */
 static u32 fetch(const char *path)
@@ -545,7 +538,7 @@ static int ask_message(char *msg, const char *head)
 /* hid = "NEW" para un hilo nuevo (con title) o el numero de un hilo. Devuelve 1 si el hub dijo OK. */
 static int send_post(const char *hid, const char *title, const char *msg, int mlen, char *newid)
 {
-    char key[64], cmd[160];
+    char key[64];
     struct mbox *m = (struct mbox *)(unsigned long)MBOX_ADDR;
     u8 *out = (u8 *)(unsigned long)APP_BASE;
     int hl = 0, i;
@@ -573,11 +566,7 @@ static int send_post(const char *hid, const char *title, const char *msg, int ml
         out[hl + i] = (u8)msg[i];
     pr("Enviando ...\n");
     m->magic = MBOX_MAGIC; m->app_len = 0; m->list_len = 0; m->spare = (u32)(hl + mlen);
-    if (!build_cmd(cmd, sizeof cmd, "dhcp;bospost ", hub, "/foro/post", 0, 0)) {
-        pr("FORO: la direccion del hub es demasiado larga\n");
-        return 0;
-    }
-    run_net(cmd);
+    run_bnm_post(hub, "/foro/post");
     if (m->magic != MBOX_MAGIC || m->list_len == 0) {
         pr("\nFORO: no se pudo enviar (clave equivocada, mensajes muy seguidos, hub dormido o sin red).\n");
         return 0;

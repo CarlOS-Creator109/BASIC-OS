@@ -1,14 +1,16 @@
 /* store.h - almacen de programas SAVE/LOAD sobre sectores crudos de la imagen de arranque
  *
- * Zona reservada dentro de la propia imagen de 1.44 MB (LBA 512..2759), asi que nunca
+ * Zona reservada dentro de la propia imagen de 1.44 MB (LBA 512..1799), asi que nunca
  * toca otros discos ni particiones:
- *   LBA 512-513  directorio: firma "PCBFS01" + 28 entradas {nombre[16], longitud, reservado}
+ *   LBA 512-513  directorio: firma "PCBFS01" + 16 entradas {nombre[16], longitud, reservado}
  *   LBA 520 + i*80  datos del programa i (hasta 80 sectores = 40960 bytes)
+ * El final (520 + 16*80 = 1800) es donde empieza la segunda zona de /SYS: si cambias
+ * STORE_SLOTS hay que mover SYS_EXTRA_LBA (sys.h) y EXTRA_LBA (tools/mksys.py) con el.
  */
 #ifndef STORE_H
 #define STORE_H
 
-#define STORE_SLOTS      28
+#define STORE_SLOTS      16
 #define STORE_SLOT_BYTES 40960
 #define STORE_NAME_MAX   15
 

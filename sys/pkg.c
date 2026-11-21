@@ -1,8 +1,10 @@
 /* pkg.c - PKG.APP: la "tienda" de BASIC-OS. Baja programas de un hub (hub/server.py en Render) por HTTPS y los ejecuta.
  *
- * Flujo:  PKG.APP -> NET.APP (iPXE: dhcp + imgfetch https://HUB/list + bosstash) -> memoria fija -> menu en pantalla
- *         -> elegir uno -> NET.APP otra vez (imgfetch https://HUB/get/NOMBRE + bosstash) -> comprobar SHA-256 y cabecera
+ * Flujo:  PKG.APP -> BNM (BN.APP: "@bnm fetch list https://HUB/list") -> memoria fija -> menu en pantalla
+ *         -> elegir uno -> BNM otra vez ("@bnm fetch app https://HUB/get/NOMBRE") -> comprobar SHA-256 y cabecera
  *         PCBM -> saltar a su mod_main.
+ * Toda la red pasa por BNM (BOS Net Manager), que usa BN (la pila propia) y, si no da servicio, iPXE de reserva.
+ * PKG ya no llama a NET.APP directamente.
  * Los programas de la tienda son modulos PCBM enlazados a 0x9000000 (hasta 32 MB). Si el disco de arranque es FAT16 y lo ve la
  * BIOS (el que crea INSTALL), cada programa bajado se guarda en HDn.1:/APPS/ y la proxima vez se ejecuta desde el disco, sin red.
  * Direccion del hub: primera linea de HUB.CFG en la particion FAT (HD0.1:HUB.CFG ...) o la que escribas con U.
@@ -14,7 +16,7 @@
  *       descripcion. Los numeros no cambian al filtrar: son los de la lista completa.
  * Paquetes: NOMBRE.BIN (modulo PCBM, se ejecuta) o NOMBRE.BAS (programa BASIC en texto: se carga y se escribe RUN).
  * Subir (S): un programa guardado con SAVE (se sube como NOMBRE.BAS) o un archivo de la particion (HD0.1:RUTA/X.BIN).
- *   Viaja por HTTPS como POST a HUB/upload con NET.BIN (comando bospost). El hub pide una clave: la segunda linea de
+ *   Viaja por HTTPS como POST a HUB/upload por BNM ("@bnm post"). El hub pide una clave: la segunda linea de
  *   HUB.CFG, o la que escribas. Maximo 2 MB por paquete.
  * Compilar (C): convierte un programa BASIC (guardado con SAVE o un .BAS de la particion) en NOMBRE.BIN con bas2bin
  *   (tools/bas2bin): nativo (x86-64, rapido) o empaquetado (todo el BASIC). Se guarda en HDn.1:/APPS/.
@@ -204,22 +206,13 @@ static void load_cfg(void)
 
 #include "fatw.h"                               /* escritor FAT16 (compartido con BCC) */
 
-/* ---- ejecutar NET.APP con una linea de comandos de iPXE ---- */
+/* ---- el buzon 'BSTH' compartido con BNM/BN ---- */
 static void clear_mbox(void)
 {
     struct mbox *m = (struct mbox *)(unsigned long)MBOX_ADDR;
     m->magic = 0; m->app_len = 0; m->list_len = 0;
 }
 
-static int run_net(const char *s)
-{
-    char *a = (char *)K->args;                  /* es el buffer net_args del kernel (160 bytes) */
-    int i;
-    for (i = 0; s[i] && i < 159; i++)
-        a[i] = s[i];
-    a[i] = 0;
-    return K->exec("NET.APP");
-}
 
 /* ---- bajar por BNM (BOS Net Manager): BN primero, iPXE de reserva; deja el resultado en el buzon 'BSTH' ----
  * label = "list" (-> LIST_ADDR) o "app" (-> APP_BASE). La URL es a+b+c (hub + sufijo). */
@@ -236,20 +229,21 @@ static int run_bnm(const char *label, const char *a, const char *b, const char *
     return K->exec("BN.APP");
 }
 
-static int build_cmd(char *dst, int max, const char *a, const char *b, const char *c, const char *d, const char *e)
+/* ---- subir por BNM: el cuerpo ya esta armado en APP_BASE y su tamano en el buzon (m->spare).
+ * BN lo manda por POST y, si no puede, BNM pasa a iPXE (bospost) solo. La URL es a+b. */
+static int run_bnm_post(const char *a, const char *b)
 {
-    const char *p[5];
-    int i, k = 0, j;
-    p[0] = a; p[1] = b; p[2] = c; p[3] = d; p[4] = e;
-    for (i = 0; i < 5; i++)
-        for (j = 0; p[i] && p[i][j]; j++) {
-            if (k >= max - 1)
-                return 0;
-            dst[k++] = p[i][j];
-        }
-    dst[k] = 0;
-    return 1;
+    char *args = (char *)K->args;
+    const char *parts[3];
+    int i = 0, q, j;
+    parts[0] = "@bnm post "; parts[1] = a; parts[2] = b;
+    for (q = 0; q < 3; q++)
+        for (j = 0; parts[q] && parts[q][j] && i < 159; j++)
+            args[i++] = parts[q][j];
+    args[i] = 0;
+    return K->exec("BN.APP");
 }
+
 
 /* ---- lista de programas (texto del hub: "#HUB 1 n" y lineas "NOMBRE.BIN bytes sha256 descripcion") ---- */
 #define MAXAPPS 400
@@ -668,7 +662,7 @@ static void up_name(char *dst, const char *src, const char *ext)   /* nombre 8.3
 
 static void upload(void)
 {
-    char what[64], name[16], desc[64], key[64], cmd[160];
+    char what[64], name[16], desc[64], key[64];
     struct mbox *m = (struct mbox *)(unsigned long)MBOX_ADDR;
     u8 *out = (u8 *)(unsigned long)APP_BASE, *src = (u8 *)(unsigned long)POST_DATA;
     unsigned total = 0;
@@ -741,11 +735,7 @@ static void upload(void)
     sha256_hex(out + hl, (u32)n, sum);
     pr("Subiendo "); pr(name); pr(" ("); prsize((unsigned)n); pr(") a "); pr(hub); pr(" ...\n");
     m->magic = MBOX_MAGIC; m->app_len = 0; m->list_len = 0; m->spare = (u32)(hl + n);
-    if (!build_cmd(cmd, sizeof cmd, "dhcp;bospost ", hub, "/upload", 0, 0)) {
-        pr("PKG: la direccion del hub es demasiado larga\n");
-        return;
-    }
-    run_net(cmd);
+    run_bnm_post(hub, "/upload");
     if (m->magic != MBOX_MAGIC || m->list_len == 0) {
         pr("\nPKG: la subida fallo (clave equivocada, hub dormido o sin red).\n");
         return;

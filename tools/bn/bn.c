@@ -5,7 +5,8 @@
  * escanea PCI, mapea el BAR con K->map_mmio, pone los anillos de descriptores en un banco de RAM (K->ram) y sondea
  * (el kernel no usa las interrupciones de la tarjeta).
  *
- * Mientras BN no sepa TLS, iPXE (NET.BIN / NET.APP) sigue ahi para HTTPS: PKG, FORO y COSMOS lo usan igual.
+ * BN ya hace TLS 1.3 propio. iPXE (NET.BIN / NET.APP) queda solo como RESERVA dentro de BNM: si BN no da
+ * servicio, BNM pasa la peticion a iPXE; si tampoco, da "SIN CONEXION". PKG y FORO solo hablan con BNM.
  *
  * Uso desde BASIC:
  *   BN                o  BN "dhcp"          pide IP por DHCP y la muestra
@@ -751,7 +752,10 @@ static int dechunk(int hs, int total)
 }
 
 /* baja una URL a httpbuf. Devuelve 0 si llegó respuesta; *status = código HTTP, [*bs,*total) = cuerpo (ya de-chunked). */
-static int http_fetch(const char *url, int *status, int *bs, int *total)
+/* Una peticion HTTP completa. method = "GET" o "POST"; si body != 0 se manda como cuerpo.
+ * Deja la respuesta en httpbuf: *bs = donde empieza el cuerpo, *total = bytes en total. */
+static int http_req(const char *method, const char *url, const u8 *body, int blen,
+                    int *status, int *bs, int *total)
 {
     char host[128]; const char *path; u16 port; u32 ip; int use_tls;
     static char req[400];
@@ -776,18 +780,41 @@ static int http_fetch(const char *url, int *status, int *bs, int *total)
         else pr("TLS 1.3 listo (cifrado) pero SIN raices de confianza: no verificado. Pon ROOTS.DER o usa NET.\n");
     }
 
-    { const char *s = "GET "; while (*s) req[rl++] = *s++; }
+    { const char *s = method; while (*s) req[rl++] = *s++; }
+    req[rl++] = ' ';
     { const char *s = path; while (*s) req[rl++] = *s++; }
     { const char *s = " HTTP/1.1\r\nHost: "; while (*s) req[rl++] = *s++; }
     { const char *s = host; while (*s) req[rl++] = *s++; }
-    { const char *s = "\r\nUser-Agent: BN/1\r\nConnection: close\r\n\r\n"; while (*s) req[rl++] = *s++; }
+    { const char *s = "\r\nUser-Agent: BN/1\r\nConnection: close\r\n"; while (*s) req[rl++] = *s++; }
+    if (body) {                                      /* POST: hay que anunciar el tamano del cuerpo */
+        { const char *s = "Content-Type: application/octet-stream\r\nContent-Length: "; while (*s) req[rl++] = *s++; }
+        { char d[12]; int k = 0, v = blen;
+          if (!v) d[k++] = '0';
+          while (v) { d[k++] = (char)('0' + v % 10); v /= 10; }
+          while (k) req[rl++] = d[--k]; }
+        { const char *s = "\r\n"; while (*s) req[rl++] = *s++; }
+    }
+    { const char *s = "\r\n"; while (*s) req[rl++] = *s++; }
 
     if (use_tls) {
         if (tls_write(&tlsc, (u8 *)req, rl)) { pr("BN: fallo al enviar (TLS)\n"); tcp_close(); return 1; }
+        /* el cuerpo va en trozos: un record TLS no puede con megabytes de golpe */
+        { int off = 0;
+          while (body && off < blen) {
+              int c = blen - off; if (c > 8192) c = 8192;
+              if (tls_write(&tlsc, body + off, c)) { pr("BN: fallo al enviar el cuerpo (TLS)\n"); tcp_close(); return 1; }
+              off += c;
+          } }
         bodyn = 0;
         for (;;) { int r = tls_read(&tlsc, httpbuf + bodyn, HTTPMAX - 1 - bodyn); if (r <= 0) break; bodyn += r; if (bodyn >= (int)HTTPMAX - 1) break; }
     } else {
         if (tcp_send((u8 *)req, rl)) { pr("BN: fallo al enviar\n"); tcp_close(); return 1; }
+        { int off = 0;
+          while (body && off < blen) {
+              int c = blen - off; if (c > 8192) c = 8192;
+              if (tcp_send((u8 *)body + off, c)) { pr("BN: fallo al enviar el cuerpo\n"); tcp_close(); return 1; }
+              off += c;
+          } }
         bodyn = tcp_recv(httpbuf, HTTPMAX - 1);
     }
     tcp_close();
@@ -802,6 +829,11 @@ static int http_fetch(const char *url, int *status, int *bs, int *total)
     if (is_chunked(hs)) bodyn = dechunk(hs, bodyn);
     *bs = hs; *total = bodyn;
     return 0;
+}
+
+static int http_fetch(const char *url, int *status, int *bs, int *total)
+{
+    return http_req("GET", url, 0, 0, status, bs, total);
 }
 
 static int do_get(const char *url)
@@ -889,6 +921,51 @@ static int bnm_stash(const char *label, const char *url)
     return 1;
 }
 
+/* reserva para subir: iPXE manda el cuerpo que esta en APP_BASE con bospost */
+static int ipxe_post(const char *url)
+{
+    struct mbox *m = (struct mbox *)(unsigned long)MBOX_ADDR;
+    char *args = (char *)K->args; int i = 0, j;
+    u32 blen = m->spare;                              /* PKG/FORO dejan aqui el tamano del cuerpo */
+    m->magic = 0; m->list_len = 0; m->app_len = 0; m->spare = blen;
+    { const char *s = "dhcp;bospost "; for (j = 0; s[j] && i < 158; j++) args[i++] = s[j]; }
+    for (j = 0; url[j] && i < 158; j++) args[i++] = url[j];
+    args[i] = 0;
+    if (K->exec("NET.APP") < 0) return 1;
+    if (m->magic != MBOX_MAGIC || m->list_len == 0) return 1;
+    return 0;
+}
+
+/* modo gestor para SUBIR: el cuerpo ya esta en APP_BASE y su tamano en el buzon (m->spare).
+ * Lo manda por POST con BN y, si no puede, con iPXE. La respuesta queda en LIST_ADDR. 0 = lo logro. */
+static int bnm_post(const char *url)
+{
+    struct mbox *m = (struct mbox *)(unsigned long)MBOX_ADDR;
+    const u8 *body = (const u8 *)(unsigned long)APP_BASE;
+    u32 blen = m->spare;
+    int ok = 0;
+    if (!blen) { pr("BNM: no hay nada que subir\n"); return 1; }
+    m->magic = 0; m->list_len = 0; m->app_len = 0;
+    if (nic_init() == 0) {
+        if (do_dhcp() == 0) {
+            int status = 0, bs = 0, tot = 0;
+            if (http_req("POST", url, body, (int)blen, &status, &bs, &tot) == 0 && status >= 200 && status < 400) {
+                u32 rl = (u32)(tot - bs); if (rl > LIST_MAX) rl = LIST_MAX;
+                memcpy((u8 *)(unsigned long)LIST_ADDR, httpbuf + bs, rl);
+                m->magic = MBOX_MAGIC; m->list_len = rl ? rl : 1;
+                ok = 1;
+                pr("[BNM: subido por BN, respuesta de "); prd(rl); pr(" bytes]\n");
+            } else { pr("BNM: BN no pudo subir (codigo "); prd((u32)status); pr("); paso a iPXE ...\n"); }
+        } else pr("BNM: BN sin servicio (sin DHCP); paso a iPXE ...\n");
+        K->ram(RAM_FREE, net_bank, 0, 0);
+    } else pr("BNM: sin tarjeta para BN; paso a iPXE ...\n");
+    if (ok) return 0;
+    m->spare = blen;                                  /* iPXE lo necesita intacto */
+    if (ipxe_post(url) == 0) { pr("[BNM: subido por iPXE (reserva)]\n"); return 0; }
+    pr("\nSIN CONEXION - Cable o Red?\n");
+    return 1;
+}
+
 static int bnm(const char *cmd)
 {
     char url[256]; int i; const char *u = cmd;
@@ -930,6 +1007,10 @@ int mod_main(const struct kapi *k)
             label[n] = 0;
             while (*a == ' ') a++;
             return bnm_stash(label, a);
+        }
+        if (istarts(a, "post")) {                    /* subir: "@bnm post <url>" (cuerpo en APP_BASE, tamano en el buzon) */
+            a += 4; while (*a == ' ') a++;
+            return bnm_post(a);
         }
         return bnm(a);                                /* modo consola: "@bnm get <url>" -> pantalla */
     }

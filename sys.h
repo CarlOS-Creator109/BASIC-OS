@@ -15,7 +15,7 @@
 #define SYS_DIR_SECT  4
 #define SYS_DATA_LBA  316
 #define SYS_END_LBA   512
-#define SYS_EXTRA_LBA 2760                  /* si no cabe, mksys.py sigue al final del disquete (2760-2879, despues de SAVE) */
+#define SYS_EXTRA_LBA 1800                  /* si no cabe, mksys.py sigue tras las ranuras de SAVE (1800-2879): 520 + STORE_SLOTS*80 */
 
 typedef void (*sys_cb)(const char *name, unsigned int size);
 
