@@ -261,28 +261,52 @@ static int der_rs(const u8 *sig, int sl, u8 r[32], u8 s[32])
     for (i = 0; i < sll; i++) s[32 - sll + i] = sp[i];
     return 0;
 }
+/* 1 = firma válida, 0 = INVÁLIDA, -1 = esquema/clave no soportados (no se puede juzgar) */
 static int verify_with(const cert *k, int scheme, const u8 *sig, int sl, const u8 *hash, int hl)
 {
-    if (scheme == 0x0403) { u8 r[32], s[32]; if (k->key_rsa || der_rs(sig, sl, r, s)) return 0; return ecdsa_p256_verify(k->ec, hash, hl, r, s); }
-    if (scheme == 0x0804 || scheme == 0x0805) { if (!k->key_rsa) return 0; return rsa_pss_verify(k->n, k->nlen, k->e, k->elen, sig, sl, hash, hl); }
-    if (scheme == 0x0401) { if (!k->key_rsa) return 0; return rsa_pkcs1_verify(k->n, k->nlen, k->e, k->elen, sig, sl, hash, hl); }
-    return 0;
+    if (k->unsupported) return -1;
+    if (scheme == 0x0403) { u8 r[32], s[32]; if (k->key_rsa) return -1; if (der_rs(sig, sl, r, s)) return 0; return ecdsa_p256_verify(k->ec, hash, hl, r, s); }
+    if (scheme == 0x0804 || scheme == 0x0805) { if (!k->key_rsa) return -1; return rsa_pss_verify(k->n, k->nlen, k->e, k->elen, sig, sl, hash, hl); }
+    if (scheme == 0x0401) { if (!k->key_rsa) return -1; return rsa_pkcs1_verify(k->n, k->nlen, k->e, k->elen, sig, sl, hash, hl); }
+    return -1;                                       /* ed25519, ECDSA P-384 (0503), etc.: no soportado */
 }
-/* ¿los certs del chain[m-1] encadenan a una raíz de confianza? */
+/* describe en el log el tipo de clave y el algoritmo de firma de un cert (para diagnóstico) */
+static void log_cert(tls_conn *c, const char *tag, const cert *x)
+{
+    if (!c->log) return;
+    log_(c, tag);
+    if (x->key_rsa) log_(c, " clave=RSA");
+    else if (x->unsupported) log_(c, " clave=EC-no-P256(P-384?)");
+    else log_(c, " clave=EC-P256");
+    if (x->sig_alg == SIG_ECDSA)
+        log_(c, x->sig_hash == 32 ? " firma=ECDSA-SHA256" : x->sig_hash == 48 ? " firma=ECDSA-SHA384" : " firma=ECDSA-SHA512");
+    else if (x->sig_alg == SIG_RSA_PKCS1) log_(c, " firma=RSA-PKCS1");
+    else if (x->sig_alg == SIG_RSA_PSS)   log_(c, " firma=RSA-PSS");
+    else log_(c, " firma=?");
+    log_(c, "\n");
+}
+
+/* ¿el chain[m-1] encadena a una raíz de confianza?
+   1 = sí (firma de la raíz verificada), 0 = ninguna raíz coincide, -1 = coincide por nombre pero no puedo verificar (p.ej. raíz P-384) */
 static int anchored(tls_conn *c, const cert *top)
 {
-    const u8 *p = c->roots; int left = c->roots_len;
+    const u8 *p = c->roots; int left = c->roots_len, unsup = 0;
     while (left > 4 && p[0] == 0x30) {
         int l = p[1] & 0x80 ? 0 : p[1], used;
         if (p[1] & 0x80) { int nb = p[1] & 0x7F, i; l = 0; for (i = 0; i < nb; i++) l = l << 8 | p[2 + i]; used = 2 + nb + l; }
         else used = 2 + l;
         if (used > left) break;
         { cert R; if (x509_parse(p, used, &R) == 0) {
-            if (top->issuer_len == R.subject_len && !diff(top->issuer, R.subject, R.subject_len) && x509_check_sig(top, &R)) return 1;
+            if (top->issuer_len == R.subject_len && !diff(top->issuer, R.subject, R.subject_len)) {
+                int v = x509_check_sig(top, &R);
+                if (v == 1) return 1;                 /* raíz encontrada y firma buena */
+                if (v < 0) unsup = 1;                 /* raíz encontrada pero algoritmo no soportado (R4 = P-384) */
+                /* v == 0: mismo nombre pero firma mala; podría ser otra raíz homónima, sigo buscando */
+            }
         } }
         p += used; left -= used;
     }
-    return 0;
+    return unsup ? -1 : 0;
 }
 static int tls_verify(tls_conn *c)
 {
@@ -299,29 +323,50 @@ static int tls_verify(tls_conn *c)
     }
     if (!m) return 1;
 
+    /* diagnóstico: cada cert de la cadena que mandó el server, con su clave y algoritmo */
+    { int i; for (i = 0; i < m; i++) {
+        char t[16]; t[0]='c'; t[1]='e'; t[2]='r'; t[3]='t'; t[4]=' '; t[5]=(char)('0'+i); t[6]=':'; t[7]=0;
+        log_cert(c, t, &chain[i]); } }
+
+    /* invalid = algo DEFINITIVAMENTE malo (firma inválida) -> cancelar.
+       unsup   = solo que no soporto el algoritmo (p.ej. P-384) -> seguir cifrado pero sin verificar. */
+    int invalid = 0, unsup = 0;
+
     /* 1) CertificateVerify: firma del servidor con la clave de la hoja, sobre el transcript */
     {
         int scheme = c->cverify[0] << 8 | c->cverify[1];
         int slen = c->cverify[2] << 8 | c->cverify[3];
         const u8 *sig = c->cverify + 4;
         int hl = (scheme == 0x0805) ? 48 : 32;
-        u8 buf[64 + 33 + 1 + 32], h[48]; int i, n = 0;
+        u8 buf[64 + 33 + 1 + 32], h[48]; int i, n = 0, r;
         if (slen + 4 > c->cverify_len) return 1;
         for (i = 0; i < 64; i++) buf[n++] = 0x20;
         { const char *s = "TLS 1.3, server CertificateVerify"; while (*s) buf[n++] = (u8)*s++; }
         buf[n++] = 0;
         for (i = 0; i < 32; i++) buf[n++] = c->th_cert[i];
         hash_by_len(hl, buf, n, h);
-        if (!verify_with(&chain[0], scheme, sig, slen, h, hl)) { log_(c, "TLS: la firma del handshake (CertificateVerify) no cuadra\n"); return 1; }
+        r = verify_with(&chain[0], scheme, sig, slen, h, hl);
+        if (r == 0) { log_(c, "TLS: la firma del handshake (CertificateVerify) es INVALIDA\n"); invalid = 1; }
+        else if (r < 0) { log_(c, "TLS: no soporto el esquema del CertificateVerify\n"); unsup = 1; }
     }
     /* 2) cadena: cada cert firmado por el siguiente */
-    { int i; for (i = 0; i + 1 < m; i++) if (!x509_check_sig(&chain[i], &chain[i + 1])) { log_(c, "TLS: la cadena de certificados no cuadra\n"); return 1; } }
+    { int i; for (i = 0; i + 1 < m; i++) {
+        int r = x509_check_sig(&chain[i], &chain[i + 1]);
+        if (r == 0) { log_(c, "TLS: un eslabon de la cadena es INVALIDO\n"); invalid = 1; }
+        else if (r < 0) { log_(c, "TLS: un eslabon usa un algoritmo que no soporto (P-384?)\n"); unsup = 1; }
+    } }
     /* 3) raíz de confianza */
-    if (c->roots) { if (!anchored(c, &chain[m - 1])) { log_(c, "TLS: el certificado no encadena a una raíz de confianza\n"); return 1; } }
-    /* 4) nombre del host */
-    if (!x509_match_host(&chain[0], c->host)) { log_(c, "TLS: el certificado no es para este host\n"); return 1; }
+    if (c->roots) {
+        int a = anchored(c, &chain[m - 1]);
+        if (a == 0) { log_(c, "TLS: no encadena a ninguna raiz de confianza\n"); unsup = 1; }   /* no es "malicioso": puede faltar la raíz o ser P-384 */
+        else if (a < 0) { log_(c, "TLS: la raiz existe pero es de un algoritmo que no soporto (GTS Root R4 = P-384)\n"); unsup = 1; }
+    }
+    /* 4) nombre del host: esto SÍ lo puedo comprobar siempre y un fallo es sospechoso */
+    if (!x509_match_host(&chain[0], c->host)) { log_(c, "TLS: el certificado no es para este host\n"); invalid = 1; }
 
-    c->verified = c->roots ? 1 : 0;
+    if (invalid) { c->verified = 0; return 1; }          /* cert malo de verdad: cancelar */
+    if (unsup || !c->roots) { c->verified = 0; return 2; } /* no lo pude verificar del todo: cifrado pero sin autenticar */
+    c->verified = 1;                                      /* cadena completa verificada contra una raíz */
     return 0;
 }
 
@@ -364,9 +409,15 @@ int tls_connect(tls_conn *c, void *io, tls_send_fn snd, tls_recv_fn rcv, const c
     }
 
     /* verificar el certificado solo si hay raíces de confianza: sin ellas no se puede autenticar, y la verificación
-     * (ECDSA/RSA) es cara — no tiene sentido pagarla para tirarla. Con raíces, un fallo es fatal. */
-    if (c->roots) { if (tls_verify(c)) { log_(c, "TLS: el certificado no es de fiar\n"); return -2; } }
-    else c->verified = 0;
+     * (ECDSA/RSA) es cara — no tiene sentido pagarla para tirarla.
+     *   0 = verificado   -> todo bien
+     *   1 = INVALIDO      -> cert malo/suplantación: cancelo (fatal)
+     *   2 = no verificable (algoritmo no soportado, p.ej. GTS Root R4 P-384) -> sigo CIFRADO pero sin autenticar, con aviso */
+    if (c->roots) {
+        int v = tls_verify(c);
+        if (v == 1) { log_(c, "TLS: el certificado no es de fiar (invalido), cancelo\n"); return -2; }
+        if (v == 2) log_(c, "TLS: no pude verificar la identidad (algoritmo no soportado); sigo CIFRADO pero SIN autenticar\n");
+    } else c->verified = 0;
 
     /* claves de aplicacion (con el transcript hasta el Finished del servidor) */
     derive_app(c);

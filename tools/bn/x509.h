@@ -17,11 +17,13 @@ typedef struct {
     const u8 *subject; int subject_len;     /* Name DER del sujeto */
     const u8 *san; int san_len;             /* extensión SubjectAltName (contenido), 0 si no hay */
     int is_ca;                              /* basicConstraints CA=TRUE */
+    int unsupported;                        /* clave pública con curva/algoritmo que BN no soporta (p.ej. ECDSA P-384) */
 } cert;
 
 /* parsea un cert DER. 0 = ok, <0 = error */
 int x509_parse(const u8 *der, int len, cert *c);
-/* verifica que la firma de 'c' es válida con la clave pública de 'ca' (sobre c->tbs). 1 = ok */
+/* verifica la firma de 'c' con la clave pública de 'ca' (sobre c->tbs).
+   1 = firma válida, 0 = INVÁLIDA, -1 = no se puede comprobar (curva/algoritmo no soportados, p.ej. raíz P-384) */
 int x509_check_sig(const cert *c, const cert *ca);
 /* ¿el host casa con algún dNSName del SAN (con comodín *.) ? 1 = sí */
 int x509_match_host(const cert *c, const char *host);

@@ -61,6 +61,7 @@ static void parse_spki(const der *spki, cert *c)
           c->n = n.p; c->nlen = n.len; c->e = e.p; c->elen = e.len;
       } else {
           if (kl == 65 && kp[0] == 0x04) { int i; for (i = 0; i < 64; i++) c->ec[i] = kp[1 + i]; }
+          else c->unsupported = 1;                                       /* curva EC que no es P-256 (p.ej. P-384) */
       }
     }
 }
@@ -123,22 +124,25 @@ static int ecdsa_rs(const u8 *sig, int slen, u8 r[32], u8 s[32])
     return 0;
 }
 
+/* 1 = firma válida, 0 = firma INVÁLIDA (cert malo), -1 = no se puede comprobar (algoritmo/curva no soportados) */
 int x509_check_sig(const cert *c, const cert *ca)
 {
     u8 h[64];
+    if (ca->unsupported) return -1;                                  /* la clave de la CA es una curva que no soporto */
     hash_by_len(c->sig_hash, c->tbs, c->tbs_len, h);
     if (c->sig_alg == SIG_ECDSA) {
         u8 r[32], s[32];
-        if (ca->key_rsa) return 0;                                   /* clave de la CA no es EC */
-        if (ecdsa_rs(c->sig, c->sig_len, r, s)) return 0;
+        if (ca->key_rsa) return -1;                                  /* firma ECDSA pero la CA tiene clave RSA: raro, no juzgo */
+        if (c->sig_hash != 32) return -1;                            /* ECDSA con SHA-384/512 => curva P-384/521: no soportada */
+        if (ecdsa_rs(c->sig, c->sig_len, r, s)) return -1;
         return ecdsa_p256_verify(ca->ec, h, c->sig_hash, r, s);
     }
-    if (!ca->key_rsa) return 0;
+    if (!ca->key_rsa) return -1;
     if (c->sig_alg == SIG_RSA_PKCS1)
         return rsa_pkcs1_verify(ca->n, ca->nlen, ca->e, ca->elen, c->sig, c->sig_len, h, c->sig_hash);
     if (c->sig_alg == SIG_RSA_PSS)
         return rsa_pss_verify(ca->n, ca->nlen, ca->e, ca->elen, c->sig, c->sig_len, h, c->sig_hash);
-    return 0;
+    return -1;                                                       /* algoritmo de firma desconocido */
 }
 
 /* compara ignorando mayúsculas; pat puede empezar por "*." */
